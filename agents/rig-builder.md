@@ -51,3 +51,5 @@ look unchanged. A limb that lost pixels means a wrong boundary.
 The layer stack you propose, bottom to top, with what goes on each and why any
 part is grouped. Flag anything the design needs that the standard rig lacks —
 a two-handed weapon that crosses the body needs its own thinking about stacking.
+
+Use the shared PixelSpec, exact sprite ID and scoped action evidence during handoffs. Return remaining finding codes, action IDs and verified constraints; distinguish preferences from enforced constraints.

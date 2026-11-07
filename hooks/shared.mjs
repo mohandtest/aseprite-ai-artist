@@ -45,7 +45,7 @@ export async function bridgeStatusMessage() {
   // implying a readiness this probe cannot see.
   return bridge
     ? `aseprite-ai-artist: bridge is up on :${controlPort}. Call preflight before any drawing to confirm Aseprite itself is attached.`
-    : `aseprite-ai-artist: no bridge on :${controlPort} yet — it starts on the first tool call. If drawing fails, run \`npx @pebbly/aseprite-ai-artist doctor\`.`;
+    : `aseprite-ai-artist: no bridge on :${controlPort} yet — it starts on the first tool call. If drawing fails, run \`node /path/to/aseprite-ai-artist/dist/cli.js doctor\`.`;
 }
 
 export const LOOK_NUDGE =

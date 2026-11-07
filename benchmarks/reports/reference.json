@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "kind": "deterministic-reference",
+  "note": "Reference tool sequence, not a model evaluation. Tokens, craft scores and model improvements are unmeasured.",
+  "createdAt": "2026-11-07T22:57:33.103Z",
+  "results": [
+    {
+      "id": "eye-expression",
+      "hardConstraintPass": true,
+      "collateralPixels": 0,
+      "staleRejected": true,
+      "previewCommitParity": true,
+      "toolCalls": 7,
+      "runtimeMs": 56.305799,
+      "tokens": null,
+      "model": null
+    },
+    {
+      "id": "three-pixel-highlight",
+      "hardConstraintPass": true,
+      "collateralPixels": 0,
+      "staleRejected": true,
+      "previewCommitParity": true,
+      "toolCalls": 7,
+      "runtimeMs": 55.69257499999999,
+      "tokens": null,
+      "model": null
+    },
+    {
+      "id": "transparent-local-fix",
+      "hardConstraintPass": true,
+      "collateralPixels": 0,
+      "staleRejected": true,
+      "previewCommitParity": true,
+      "toolCalls": 7,
+      "runtimeMs": 450.11128799999994,
+      "tokens": null,
+      "model": null
+    },
+    {
+      "id": "stable-idle",
+      "expectedWarnings": 0,
+      "observedWarnings": 0,
+      "hardConstraintPass": true,
+      "model": null,
+      "tokens": null
+    },
+    {
+      "id": "intentional-squash",
+      "expectedWarnings": 0,
+      "observedWarnings": 0,
+      "hardConstraintPass": true,
+      "model": null,
+      "tokens": null
+    },
+    {
+      "id": "unexpected-jitter",
+      "expectedWarnings": 2,
+      "observedWarnings": 2,
+      "hardConstraintPass": true,
+      "model": null,
+      "tokens": null
+    },
+    {
+      "id": "volume-drift",
+      "expectedWarnings": 1,
+      "observedWarnings": 1,
+      "hardConstraintPass": true,
+      "model": null,
+      "tokens": null
+    }
+  ]
+}

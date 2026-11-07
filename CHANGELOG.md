@@ -4,6 +4,15 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 [semver](https://semver.org/).
 
+## 0.9.0 (local fork)
+
+- Added structural observation, region fingerprints, bounded action diffs and annotated previews.
+- Added shared raster previews, atomic draw guards and sparse expected-state patches.
+- Added versioned PixelSpec sidecars, typed repair proposals and temporal animation checks.
+- Added isometric stamps, grid outlines, lossy opt-in scale tweens, focused rule retrieval and local safety benchmarks.
+- Client installation now launches the local checkout. npm publication and GitHub Actions workflows are removed.
+- See docs/AGENT_NATIVE.md for compatibility, scope and verification limits.
+
 ## [Unreleased]
 
 ### Changed

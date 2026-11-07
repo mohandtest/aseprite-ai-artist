@@ -63,3 +63,5 @@ Not proposing a skin ramp: the visor is closed, so no skin is visible. If you
 want the visor open, that needs 2 more slots and PICO-8 has no good midtone
 for skin — I'd suggest a custom palette instead.
 ```
+
+Use the shared PixelSpec, exact sprite ID and scoped action evidence during handoffs. Return remaining finding codes, action IDs and verified constraints; distinguish preferences from enforced constraints.

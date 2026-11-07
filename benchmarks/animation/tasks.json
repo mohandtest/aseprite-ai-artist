@@ -1,0 +1,9 @@
+{
+ "schemaVersion":1,
+ "tasks":[
+  {"id":"stable-idle","frames":[[4,4,4,4],[4,4,4,4],[4,4,4,4]],"maxAreaDriftPercent":5,"maxCentroidJumpPx":1,"expectedWarnings":0},
+  {"id":"intentional-squash","frames":[[4,4,4,4],[3,5,6,3],[4,4,4,4]],"maxAreaDriftPercent":20,"maxCentroidJumpPx":2,"expectedWarnings":0},
+  {"id":"unexpected-jitter","frames":[[4,4,4,4],[10,4,4,4],[4,4,4,4]],"maxAreaDriftPercent":5,"maxCentroidJumpPx":2,"expectedWarnings":2},
+  {"id":"volume-drift","frames":[[4,4,4,4],[4,4,2,2],[4,4,4,4]],"maxAreaDriftPercent":5,"maxCentroidJumpPx":5,"expectedWarnings":1}
+ ]
+}

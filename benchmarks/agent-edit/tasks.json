@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "tasks": [
+    {"id":"eye-expression","prompt":"Change the red eye pixel to white without touching any other pixel, layer or frame.","canvas":[16,16],"setup":[{"kind":"pixels","color":"#ff0000","points":[{"x":7,"y":6}]}],"patch":[{"x":7,"y":6,"expectedColor":"#ff0000","newColor":"#ffffff"}],"allowedRegion":{"x":7,"y":6,"width":1,"height":1},"maxChangedPixels":1},
+    {"id":"three-pixel-highlight","prompt":"Add exactly three white highlight pixels, preserving every other pixel.","canvas":[32,32],"setup":[{"kind":"rect","color":"#444444","fill":"#444444","rect":{"x":8,"y":8,"width":16,"height":16}}],"patch":[{"x":10,"y":10,"expectedColor":"#444444","newColor":"#ffffff"},{"x":11,"y":10,"expectedColor":"#444444","newColor":"#ffffff"},{"x":12,"y":10,"expectedColor":"#444444","newColor":"#ffffff"}],"allowedRegion":{"x":10,"y":10,"width":3,"height":1},"maxChangedPixels":3},
+    {"id":"transparent-local-fix","prompt":"Remove one stray pixel, retaining the main silhouette.","canvas":[128,128],"setup":[{"kind":"rect","color":"#444444","fill":"#444444","rect":{"x":40,"y":40,"width":16,"height":16}},{"kind":"pixels","color":"#ff0000","points":[{"x":60,"y":50}]}],"patch":[{"x":60,"y":50,"expectedColor":"#ff0000","newColor":"#00000000"}],"allowedRegion":{"x":60,"y":50,"width":1,"height":1},"maxChangedPixels":1}
+  ]
+}

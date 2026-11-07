@@ -1,3 +1,7 @@
+# Local fork additions
+
+See [AGENT_NATIVE.md](AGENT_NATIVE.md) for look.analyze/action_diff, guarded draw previews and patches, art_spec, animation validation, isometric boxes and scale tweens. The reference below documents the inherited base interface.
+
 # Tools
 
 Eighteen tools, grouped by noun with an `op` enum for the verbs. See

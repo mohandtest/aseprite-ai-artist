@@ -64,7 +64,8 @@
     "test:pure": "lua tests/pure.test.lua",
     "gallery:check": "pnpm --filter @pebbly/gallery run check",
     "web:dev": "pnpm --filter @pebbly/web run dev",
-    "test:agent": "node --test --experimental-strip-types tests/agent-*.test.ts"
+    "test:agent": "node --test --experimental-strip-types tests/agent-*.test.ts",
+    "benchmark:agent": "node scripts/benchmark-agent.mjs"
   },
   "omp": {
     "extensions": [

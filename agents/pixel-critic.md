@@ -111,3 +111,5 @@ and whether each BLOCKING finding you are told about is still present in
 each. Judge them with `read` on the files, at full size, before you read any
 note about which is newer. Do not score them out of 10 — a choice between two
 is the only judgement here that is stable from one call to the next.
+
+Use the shared PixelSpec, exact sprite ID and scoped action evidence during handoffs. Return remaining finding codes, action IDs and verified constraints; distinguish preferences from enforced constraints.

@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { retrieveRules, ruleMetadata } from "./lib/retrieval.js";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -167,6 +168,79 @@ function registerSkillSurface(
     },
   );
 
+  const metadata = JSON.stringify(ruleMetadata(rules));
+  server.registerResource(
+    "rule-metadata",
+    "rules://metadata",
+    {
+      title: "Compact rule metadata",
+      description:
+        "Topics, sprite sizes, template counts and source URIs, computed from the installed rulebook at startup.",
+      mimeType: "application/json",
+    },
+    async () => ({ contents: [{ uri: "rules://metadata", mimeType: "application/json", text: metadata }] }),
+  );
+  server.registerResource(
+    "rule-guide-index",
+    "rules://guide",
+    {
+      title: "Focused rule retrieval",
+      description: "Read rules://guide/{topic} with a subject or finding code for bounded excerpts.",
+      mimeType: "text/plain",
+    },
+    async () => ({
+      contents: [
+        {
+          uri: "rules://guide",
+          mimeType: "text/plain",
+          text: "Use rules://guide/eyes, rules://guide/jitter or rules://guide/palette_drift. Results are excerpts with canonical source URIs.",
+        },
+      ],
+    }),
+  );
+  server.registerResource(
+    "rule-guide",
+    new ResourceTemplate("rules://guide/{topic}", { list: undefined }),
+    {
+      title: "Focused rule excerpts",
+      description:
+        "Read 2-4 focused excerpts by topic or validation finding code, e.g. rules://guide/eyes or rules://guide/palette_drift.",
+      mimeType: "application/json",
+    },
+    async (uri, variables) => ({
+      contents: [
+        {
+          uri: uri.href,
+          mimeType: "application/json",
+          text: JSON.stringify(retrieveRules(rules, String(variables.topic))),
+        },
+      ],
+    }),
+  );
+  server.registerResource(
+    "font-index",
+    "knowledge://fonts",
+    {
+      title: "Installed bitmap fonts",
+      description:
+        "Discover installed bitmap JSON fonts for draw text; add licensed fonts to knowledge/fonts before starting the server.",
+      mimeType: "application/json",
+    },
+    async () => ({
+      contents: [
+        {
+          uri: "knowledge://fonts",
+          mimeType: "application/json",
+          text: JSON.stringify(
+            readdirSync(path.join(root, "knowledge", "fonts"))
+              .filter((f) => f.endsWith(".json"))
+              .map((f) => f.slice(0, -5)),
+          ),
+        },
+      ],
+    }),
+  );
+
   // ── skills ───────────────────────────────────────────────────────────────
   // Exposed twice on purpose: as resources so any agent can discover and read
   // them, and as prompts so clients that render prompts get them as commands.
@@ -193,9 +267,7 @@ function registerSkillSurface(
       const name = String(variables.name);
       const skill = skills.find((s) => s.name === name);
       if (!skill) {
-        throw new Error(
-          `Unknown skill '${name}'. Available: ${skills.map((s) => s.name).join(", ")}.`,
-        );
+        throw new Error(`Unknown skill '${name}'. Available: ${skills.map((s) => s.name).join(", ")}.`);
       }
       return {
         contents: [{ uri: uri.href, mimeType: "text/markdown", text: skill.body }],

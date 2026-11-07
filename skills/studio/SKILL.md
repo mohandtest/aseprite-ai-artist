@@ -233,3 +233,11 @@ over the active layer and frame.
 
 `rules://index` for the craft every stage relies on, `rules://07-review-checklist`
 for what "finished" means.
+
+## Verified editing protocol
+
+For local edits, inspect the exact layer/frame with `look analyze` or `read_pixels`; retain its fingerprint and region. Read `art_spec get` and the relevant `rules://guide/{topic}` excerpts. Use `draw mode="preview"` with `guard.expectedRegionFingerprint`, matching `guard.fingerprintRegion`, an `allowedRegion`, and `maxChangedPixels`. Preview uses the same raster engine as commit. If acceptable, repeat with mode="apply" and the same guard. A stale_region response means inspect again, never drop the guard to force the edit. Review `look action_diff actionId=...`, then focused validation.
+
+Keep a versioned PixelSpec with explicit user constraints and provenance; export it explicitly to an absolute `.aseprite-ai.json` path for persistence. Session specs are lost when Aseprite exits. Protected regions and hard draw constraints are enforced; preferences remain advisory. `validate mode="plan_repairs"` only suggests fixes, and never applies them. Temporal checks need explicit layer, frames and pose-appropriate tolerances; squash/stretch must not be treated as accidental drift.
+
+At a specialist handoff pass sprite ID, PixelSpec, goal, target layer/frame/region, fingerprint, action IDs, remaining findings and allowed scope. Limit local fix loops to three rounds. Critic first reads artwork without the creator's explanation, then checks the brief; keep blind A/B comparison for aesthetic decisions. Any mutation after final critique requires another review. A local pixel request does not need a full concept workflow. Live disconnect never authorizes headless fallback or disk editing.

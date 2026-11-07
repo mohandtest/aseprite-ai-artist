@@ -80,3 +80,5 @@ drop it and carry the weight in the body height alone.
 
 Say what you are unsure about. A plan that hides its risks produces eight frames
 of work that has to be redone.
+
+Use the shared PixelSpec, exact sprite ID and scoped action evidence during handoffs. Return remaining finding codes, action IDs and verified constraints; distinguish preferences from enforced constraints.

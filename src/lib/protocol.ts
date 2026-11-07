@@ -138,7 +138,7 @@ export function notConnected(detail?: string): LiveError {
       "Aseprite is not connected. Open Aseprite with the aseprite-ai-artist extension installed, then retry.",
     {
       doNotFallBackToDisk: true,
-      remediation: "Run `npx @pebbly/aseprite-ai-artist doctor` for a step-by-step check.",
+      remediation: "Run `node /path/to/aseprite-ai-artist/dist/cli.js doctor` for a step-by-step check.",
     },
   );
 }

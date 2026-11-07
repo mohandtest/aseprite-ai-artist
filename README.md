@@ -9,13 +9,11 @@
 Not a generated PNG. Not a file changed behind your back.
 The document on your screen, one pixel at a time — and every step is one Ctrl+Z.
 
-[![npm](https://img.shields.io/npm/v/@pebbly/aseprite-ai-artist?color=%23e07a3f&label=npm)](https://www.npmjs.com/package/@pebbly/aseprite-ai-artist)
-[![CI](https://github.com/with-pebbly/aseprite-ai-artist/actions/workflows/ci.yml/badge.svg)](https://github.com/with-pebbly/aseprite-ai-artist/actions/workflows/ci.yml)
 [![licence](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
 
 <sub>☔ 500×400 · 384 frames at 24 fps · 16 s · 24 layers — drawn by <b>Claude Opus 5.5</b> through this server.</sub>
 
-**[Install](#-install)** · **[How it draws](#-how-it-draws)** · **[Skills](#-skills)** · **[Gallery](https://pixeli.pebbly.space/)**
+**[Install](#-install)** · **[How it draws](#-how-it-draws)** · **[Skills](#-skills)** · **[Upstream gallery](https://pixeli.pebbly.space/)**
 
 </div>
 
@@ -34,83 +32,30 @@ You stay in charge. Don't like the helmet? Ctrl+Z, or just say so.
 Works with **Claude Code, omp, OpenCode, Codex CLI, Gemini CLI, Cursor, VS Code
 and Windsurf**. Best results so far: **Claude Opus 5.5**.
 
-## 🚀 Install
+## 🚀 Install locally
 
-You need [Aseprite](https://www.aseprite.org/) 1.3+ and Node 22.6+ (macOS, Linux
-or Windows).
-
-**1. The Aseprite extension** — then quit and reopen Aseprite:
+This is the local-only fork at `mohandtest/aseprite-ai-artist`. Nothing needs to be published, and GitHub Actions are removed. Node 22.6+ and Aseprite 1.3+ are required.
 
 ```bash
-npx @pebbly/aseprite-ai-artist install-extension
+git clone https://github.com/mohandtest/aseprite-ai-artist.git
+cd aseprite-ai-artist
+npm ci --ignore-scripts
+npm run build
+node dist/cli.js install-extension
+node dist/cli.js install codex
 ```
 
-**2. Your agent:**
-
-<details open>
-<summary><b>Claude Code</b></summary>
-
-```
-/plugin marketplace add with-pebbly/aseprite-ai-artist
-/plugin install aseprite@aseprite-ai-artist
-```
-
-</details>
-
-<details>
-<summary><b>omp</b></summary>
+Replace `codex` with `claude`, `cursor`, `gemini`, `vscode`, `windsurf` or `opencode`. Quit and reopen Aseprite after installing the extension. `install` writes your local Node executable and this checkout's absolute `dist/cli.js` path into the client config. It does not fetch the upstream npm package. Keep this checkout in place; reinstall the client config if you move it.
 
 ```bash
-omp plugin marketplace add with-pebbly/aseprite-ai-artist
-omp plugin install aseprite@aseprite-ai-artist
+node dist/cli.js doctor
+# Explicit headless use, if you want it:
+node dist/cli.js serve --headless --aseprite /path/to/aseprite
 ```
 
-</details>
+After pulling updates, run `npm ci --ignore-scripts && npm run build`, then reinstall the Aseprite extension if its Lua changed. The fork replaces the upstream extension; do not run both on ports 9931/9932.
 
-<details>
-<summary><b>OpenCode 2.x</b></summary>
-
-```bash
-npx @pebbly/aseprite-ai-artist install opencode
-opencode plugin add github:with-pebbly/aseprite-ai-artist#main::path:opencode
-```
-
-</details>
-
-<details>
-<summary><b>Codex, Gemini, Cursor, VS Code, Windsurf</b></summary>
-
-```bash
-npx @pebbly/aseprite-ai-artist install codex      # or gemini, cursor, --all
-```
-
-Your config is backed up first; `--dry-run` shows the change.
-
-</details>
-
-**3. Check it** — restart your agent, then:
-
-```bash
-npx @pebbly/aseprite-ai-artist doctor
-```
-
-All ticks means you're ready. Updating? Run step 1 again. Odd setups (Steam,
-custom folders, Windows paths) are in [docs/INSTALL.md](docs/INSTALL.md).
-
-<details>
-<summary><b>No window? Headless mode</b></summary>
-
-For CI or a batch of assets, the server can run Aseprite itself with no window:
-
-```bash
-npx @pebbly/aseprite-ai-artist serve --headless --aseprite /path/to/aseprite
-```
-
-Nothing is on disk until the agent saves, and it never touches a file your
-editor has open. It is never a fallback: if your window isn't attached, the
-agent asks instead of quietly switching.
-
-</details>
+See [the new agent APIs](docs/AGENT_NATIVE.md) for guarded previews, fingerprints, PixelSpec, animation analysis and local tests.
 
 ## 🎨 How it draws
 

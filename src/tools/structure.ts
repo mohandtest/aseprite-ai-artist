@@ -11,15 +11,39 @@ import { fail, ok, targetShape } from "./kit.js";
  * a walk cycle is eight frames with three different durations.
  */
 const blendMode = z.enum([
-  "normal", "multiply", "screen", "overlay", "darken", "lighten",
-  "color_dodge", "color_burn", "hard_light", "soft_light", "difference",
-  "exclusion", "hue", "saturation", "color", "luminosity", "addition",
-  "subtract", "divide",
+  "normal",
+  "multiply",
+  "screen",
+  "overlay",
+  "darken",
+  "lighten",
+  "color_dodge",
+  "color_burn",
+  "hard_light",
+  "soft_light",
+  "difference",
+  "exclusion",
+  "hue",
+  "saturation",
+  "color",
+  "luminosity",
+  "addition",
+  "subtract",
+  "divide",
 ]);
 
 const layerOpName = z.enum([
-  "list", "create", "rename", "delete", "reorder", "set",
-  "group", "ungroup", "merge", "duplicate", "activate",
+  "list",
+  "create",
+  "rename",
+  "delete",
+  "reorder",
+  "set",
+  "group",
+  "ungroup",
+  "merge",
+  "duplicate",
+  "activate",
 ]);
 
 /** One layer operation. Used for both the single-op form and every `batch` entry. */
@@ -140,7 +164,9 @@ export function registerStructureTools(server: McpServer, live: AsepriteLink): v
           .int()
           .positive()
           .optional()
-          .describe("For 'reorder': the 1-based position `frame` ends up at. Its cels and duration move with it; tag ranges stay where they are."),
+          .describe(
+            "For 'reorder': the 1-based position `frame` ends up at. Its cels and duration move with it; tag ranges stay where they are.",
+          ),
         linkCels: z
           .boolean()
           .default(false)
@@ -149,9 +175,7 @@ export function registerStructureTools(server: McpServer, live: AsepriteLink): v
       outputSchema: {
         sprite: z.string(),
         frameCount: z.number().int(),
-        frames: z
-          .array(z.object({ number: z.number().int(), durationMs: z.number().int() }))
-          .optional(),
+        frames: z.array(z.object({ number: z.number().int(), durationMs: z.number().int() })).optional(),
         activeFrame: z.number().int().optional(),
         totalDurationMs: z.number().int().optional(),
       },
@@ -224,7 +248,17 @@ export function registerStructureTools(server: McpServer, live: AsepriteLink): v
         "'tween' interpolates position or opacity between two frames with an easing curve; 'oscillate' adds a sinusoidal position offset over a frame range — both fill in any missing in-between cels from the start cel, in one transaction.",
       inputSchema: {
         op: z.enum([
-          "list", "create", "clear", "delete", "move", "copy", "link", "unlink", "set", "tween", "oscillate",
+          "list",
+          "create",
+          "clear",
+          "delete",
+          "move",
+          "copy",
+          "link",
+          "unlink",
+          "set",
+          "tween",
+          "oscillate",
         ]),
         ...targetShape,
         toFrame: z.number().int().positive().optional(),
@@ -236,11 +270,21 @@ export function registerStructureTools(server: McpServer, live: AsepriteLink): v
         dy: z.number().int().optional(),
         opacity: z.number().int().min(0).max(255).optional(),
         fromFrame: z.number().int().positive().optional().describe("For 'tween'/'oscillate': the start frame."),
-        property: z.enum(["position", "opacity"]).optional().describe("For 'tween'."),
-        to: z
-          .union([z.object({ x: z.number().int(), y: z.number().int() }), z.number().int().min(0).max(255)])
+        allowLossy: z
+          .boolean()
+          .default(false)
+          .describe("Required for scale tweening; raster resampling can damage pixel clusters."),
+        anchor: z
+          .object({ x: z.number().int(), y: z.number().int() })
           .optional()
-          .describe("For 'tween': end value — {x,y} for property 'position', 0-255 for 'opacity'."),
+          .describe("Scale: fixed sprite coordinate; defaults to source cel position."),
+        property: z.enum(["position", "opacity", "scale"]).optional().describe("For 'tween'."),
+        to: z
+          .union([z.object({ x: z.number().int(), y: z.number().int() }), z.number().min(0).max(255)])
+          .optional()
+          .describe(
+            "For 'tween': end value — {x,y} for property 'position', integer 0-255 for opacity, 0.125-8 for scale (allowLossy required).",
+          ),
         easing: z
           .enum(["linear", "ease_in", "ease_out", "ease_in_out", "smoothstep"])
           .default("linear")
@@ -279,6 +323,7 @@ export function registerStructureTools(server: McpServer, live: AsepriteLink): v
               x: z.number().int().optional(),
               y: z.number().int().optional(),
               opacity: z.number().int().optional(),
+              scale: z.number().optional(),
             }),
           )
           .optional()
@@ -288,6 +333,18 @@ export function registerStructureTools(server: McpServer, live: AsepriteLink): v
     },
     async (args) => {
       try {
+        if (
+          args.op === "tween" &&
+          args.property === "opacity" &&
+          (typeof args.to !== "number" || !Number.isInteger(args.to))
+        )
+          throw new Error("Opacity target must be an integer");
+        if (
+          args.op === "tween" &&
+          args.property === "scale" &&
+          (!args.allowLossy || typeof args.to !== "number" || args.to < 0.125 || args.to > 8)
+        )
+          throw new Error("Scale requires allowLossy and to between 0.125 and 8");
         const data = await live.call<Record<string, unknown>>("cel.apply", args);
         return ok(data);
       } catch (err) {
