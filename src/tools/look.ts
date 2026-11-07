@@ -1,6 +1,4 @@
-import { readFile, unlink } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
+import { captureImage } from "../lib/image-transport.js";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AsepriteLink } from "../bridge/link.js";
@@ -229,8 +227,7 @@ export function registerLookTools(server: McpServer, live: AsepriteLink): void {
           }
 
           case "onion": {
-            const out = tempPng("onion");
-            const meta = await live.call<{
+            const { meta, image } = await captureImage<{
               sprite: string;
               frame: number;
               frames: number[];
@@ -240,6 +237,7 @@ export function registerLookTools(server: McpServer, live: AsepriteLink): void {
               height: number;
               scale: number;
             }>(
+              live,
               "look.onion",
               {
                 sprite: args.sprite,
@@ -249,12 +247,10 @@ export function registerLookTools(server: McpServer, live: AsepriteLink): void {
                 ghostOpacity: args.ghostOpacity,
                 layer: args.layer,
                 region: args.region,
-                path: out,
                 scale: args.scale,
               },
               { expect: ["frame", "frames", "sourceWidth", "sourceHeight", "scale"] },
             );
-            const image = await readAndClean(out);
             return okWithImage(
               {
                 op: "onion",
@@ -270,20 +266,19 @@ export function registerLookTools(server: McpServer, live: AsepriteLink): void {
           }
 
           case "filmstrip": {
-            const out = tempPng("filmstrip");
-            const meta = await live.call<{
+            const { meta, image } = await captureImage<{
               sprite: string;
               frames: number;
               width: number;
               height: number;
               scale: number;
             }>(
+              live,
               "look.filmstrip",
-              { sprite: args.sprite, layer: args.layer, path: out, scale: args.scale },
+              { sprite: args.sprite, layer: args.layer, scale: args.scale },
               { expect: ["frames", "width", "height", "scale"] },
             );
             const layout = filmstripLayout(meta.frames);
-            const image = await readAndClean(out);
             return okWithImage(
               {
                 op: "filmstrip",
@@ -301,8 +296,7 @@ export function registerLookTools(server: McpServer, live: AsepriteLink): void {
           }
 
           case "compare": {
-            const out = tempPng("compare");
-            const meta = await live.call<{
+            const { meta, image } = await captureImage<{
               sprite: string;
               frame: number;
               reference: string;
@@ -310,18 +304,17 @@ export function registerLookTools(server: McpServer, live: AsepriteLink): void {
               sourceHeight: number;
               scale: number;
             }>(
+              live,
               "look.compare",
               {
                 sprite: args.sprite,
                 frame: args.frame,
                 reference: args.reference,
                 region: args.region,
-                path: out,
                 scale: args.scale,
               },
               { expect: ["frame", "reference", "sourceWidth", "sourceHeight", "scale"] },
             );
-            const image = await readAndClean(out);
             return okWithImage(
               {
                 op: "compare",
@@ -337,8 +330,7 @@ export function registerLookTools(server: McpServer, live: AsepriteLink): void {
           }
 
           default: {
-            const out = tempPng("preview");
-            const meta = await live.call<{
+            const { meta, image } = await captureImage<{
               sprite: string;
               sourceWidth: number;
               sourceHeight: number;
@@ -346,20 +338,19 @@ export function registerLookTools(server: McpServer, live: AsepriteLink): void {
               height: number;
               scale: number;
             }>(
+              live,
               args.overlays ? "look.preview.annotated" : "look.preview",
               {
                 sprite: args.sprite,
                 frame: args.frame,
                 layer: args.layer,
                 region: args.region,
-                path: out,
                 overlays: args.overlays,
                 // Omitted scale means the extension picks one from the sprite size.
                 scale: args.scale,
               },
               { expect: ["sourceWidth", "sourceHeight", "scale"] },
             );
-            const image = await readAndClean(out);
             return okWithImage(
               {
                 op: "preview",
@@ -488,16 +479,6 @@ async function readPalette(live: AsepriteLink, sprite: string | undefined): Prom
 
 function offPaletteNote(glyphs: string[]): string {
   return glyphs.length === 0 ? "" : `\nOff-palette (glyphs not stable between reads): ${glyphs.join(" ")}`;
-}
-
-function tempPng(prefix: string): string {
-  return path.join(tmpdir(), `aseprite-ai-artist-${prefix}-${Date.now()}-${process.pid}.png`);
-}
-
-async function readAndClean(file: string): Promise<{ data: string; mimeType: string }> {
-  const buf = await readFile(file);
-  await unlink(file).catch(() => {});
-  return { data: buf.toString("base64"), mimeType: "image/png" };
 }
 
 function formatLegend(legend: Record<string, string>): string {

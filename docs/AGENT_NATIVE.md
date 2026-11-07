@@ -27,6 +27,25 @@ Replace `codex` with your supported client. Restart Aseprite after installing th
 
 `private: true` blocks npm publication. The old GitHub Actions workflows are removed. Historical upstream docs or changelog entries may mention publishing; they are not the local fork's distribution instructions.
 
+## Windows Aseprite with a WSL MCP server
+
+From version 0.9.1, internal preview images are transferred as PNG bytes over the existing bridge. Aseprite creates and removes its own temporary PNG using its native temporary directory. The WSL server never reads a Windows temporary path, and the Windows editor never receives a WSL `/tmp` path. This applies to guarded drawing previews, regular/annotated previews, filmstrips, onion skins and comparisons.
+
+Both sides must be updated. From the WSL checkout:
+
+```sh
+git pull
+npm ci --ignore-scripts
+npm run build
+node dist/cli.js install-extension --dir "/mnt/c/Users/<WindowsUsername>/AppData/Roaming/Aseprite"
+```
+
+Restart Windows Aseprite and the MCP server/client connection. Preflight should report extension version `0.9.1` and feature `image_transport_v1`. No shared temporary folder or WSL path translation is required for previews. Aseprite may ask once for the extension to read/write its local temporary PNG; allow the request in Windows Aseprite, then retry if the first call timed out. Older extensions reject the new capture command explicitly instead of silently falling back to filesystem previews.
+
+Each PNG is capped at 8 MiB before base64 encoding so image and metadata fit the bridge's 16 MiB message limit. Files are cleaned on successful capture and renderer failures. The capture command only wraps read-only views or `draw` in preview mode; it refuses drawing commits.
+
+This change concerns internal preview transport. Explicit export and asset-import paths still need to be accessible to the Aseprite host; PixelSpec sidecars are written by the MCP server.
+
 ## Observe exact state
 
 ```json
@@ -193,9 +212,9 @@ Live disconnection still refuses with `not_connected`/`doNotFallBackToDisk`. Hea
 The implementation was checked against a scripting-enabled CLI built from Aseprite's `v1.3.17` source tag:
 
 - Existing Node suite: 112 passed, none skipped with the native executable available.
-- New agent suite: 15 passed, including a full MCP round trip covering preview PNGs, guarded commit, stale rejection, PixelSpec export/import, rule retrieval, overlays, and spec-driven motion warnings.
-- Real Lua handler suite: 109 passed. Includes one-undo behavior, no undo on preview/rejection, selection clipping, nonzero indexed transparency, frozen-source scale tweening and protected regions.
-- Aseprite-free Lua suite: 12 passed.
+- New agent suite: 26 passed, including a full MCP round trip covering preview PNGs, guarded commit, stale rejection, PixelSpec export/import, rule retrieval, overlays, and spec-driven motion warnings.
+- Real Lua handler suite: 113 passed. Includes one-undo behavior, no undo on preview/rejection, selection clipping, nonzero indexed transparency, frozen-source scale tweening and protected regions.
+- Aseprite-free Lua suite: 13 passed.
 - Seven deterministic reference scenarios: three guarded local edits and four animation cases passed. See [reference.json](../benchmarks/reports/reference.json).
 - All four cumulative milestone source snapshots independently typechecked.
 

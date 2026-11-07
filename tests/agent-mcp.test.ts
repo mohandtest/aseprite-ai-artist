@@ -26,6 +26,8 @@ test(
         assert(!reply.isError, JSON.stringify(reply));
         return reply;
       };
+      const preflight = await call("preflight");
+      assert((preflight.structuredContent!.features as string[]).includes("image_transport_v1"));
       const created = await call("sprite_manage", { op: "new", width: 16, height: 16 });
       const sprite = `#${created.structuredContent!.id}`;
       const info = await call("sprite_info", { sprite });
@@ -59,6 +61,11 @@ test(
       );
       const applied = await call("draw", edit);
       assert.equal(applied.structuredContent!.pixelsChanged, 1);
+      const committedView = await call("look", { ...target, op: "preview" });
+      const imageData = (reply: typeof preview) =>
+        (reply.content.find((c: unknown) => (c as { type: string }).type === "image") as { data: string }).data;
+      assert.equal(imageData(committedView), imageData(preview), "Committed PNG must match the predicted PNG");
+
       await call("look", { sprite, op: "action_diff", actionId: applied.structuredContent!.actionId });
       assert((await client.callTool({ name: "draw", arguments: edit })).isError);
       await call("art_spec", {

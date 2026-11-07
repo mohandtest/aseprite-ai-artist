@@ -55,6 +55,8 @@ node dist/cli.js serve --headless --aseprite /path/to/aseprite
 
 After pulling updates, run `npm ci --ignore-scripts && npm run build`, then reinstall the Aseprite extension if its Lua changed. The fork replaces the upstream extension; do not run both on ports 9931/9932.
 
+Running the server in WSL with Windows Aseprite? See [Windows/WSL setup](docs/AGENT_NATIVE.md#windows-aseprite-with-a-wsl-mcp-server). Version 0.9.1 transfers preview images over the bridge without a shared temp folder.
+
 See [the new agent APIs](docs/AGENT_NATIVE.md) for guarded previews, fingerprints, PixelSpec, animation analysis and local tests.
 
 ## 🎨 How it draws

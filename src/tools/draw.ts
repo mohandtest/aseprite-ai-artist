@@ -1,7 +1,4 @@
-import { readFile, unlink } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { captureImage } from "../lib/image-transport.js";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AsepriteLink } from "../bridge/link.js";
@@ -338,21 +335,20 @@ export function registerDrawTools(server: McpServer, live: AsepriteLink): void {
           }
         }
 
-        const previewPath =
-          args.mode === "preview" ? path.join(tmpdir(), `aseprite-ai-preview-${randomUUID()}.png`) : undefined;
         let image: { data: string; mimeType: string } | undefined;
         let data: Record<string, unknown>;
-        try {
-          data = await live.call<Record<string, unknown>>(
-            args.mode === "preview" || args.guard || args.ops.some((op) => op.kind === "grid_patch")
-              ? "draw.guarded"
-              : "draw.batch",
-            { ...args, ops: expandedOps, measureOnly: undefined, previewPath },
-            { expect: ["opsApplied", "pixelsChanged", "layer", "frame"] },
-          );
-          if (previewPath) image = { data: (await readFile(previewPath)).toString("base64"), mimeType: "image/png" };
-        } finally {
-          if (previewPath) await unlink(previewPath).catch(() => {});
+        const command =
+          args.mode === "preview" || args.guard || args.ops.some((op) => op.kind === "grid_patch")
+            ? "draw.guarded"
+            : "draw.batch";
+        const wireArgs = { ...args, ops: expandedOps, measureOnly: undefined };
+        const options = { expect: ["opsApplied", "pixelsChanged", "layer", "frame"] };
+        if (args.mode === "preview") {
+          const captured = await captureImage<Record<string, unknown>>(live, command, wireArgs, options);
+          data = captured.meta;
+          image = captured.image;
+        } else {
+          data = await live.call<Record<string, unknown>>(command, wireArgs, options);
         }
         const snapped = (data.colorsSnapped as { from: string; to: string; deltaE: number }[]) ?? [];
         const far = snapped.filter((s) => s.deltaE > 12);

@@ -15,12 +15,12 @@
 --------------------------------------------------------------------------------
 
 local PROTOCOL_VERSION = 1
-local EXTENSION_VERSION = "0.9.0"
+local EXTENSION_VERSION = "0.9.1"
 
 -- Optional capabilities. The wire version stays 1 across builds; new command
 -- families are gated on these flags plus the loud unsupported_command reply,
 -- so an older extension degrades visibly rather than mysteriously.
-local FEATURES = { "guarded_draw", "draw_preview", "region_fingerprint", "art_spec", "draw_batch", "recolor", "validate", "tileset", "reference", "filmstrip" }
+local FEATURES = { "guarded_draw", "draw_preview", "region_fingerprint", "art_spec", "image_transport_v1", "draw_batch", "recolor", "validate", "tileset", "reference", "filmstrip" }
 
 -- The truthy set src/cli.ts accepts, so a value that enables the tool on the
 -- server cannot fail to enable the capability here.
@@ -4337,6 +4337,66 @@ local function to_plain(value)
   return out
 end
 
+-- Preview files belong to the Aseprite host, which can be Windows while the
+-- MCP server runs in WSL. Never ask the server to read an editor-local path.
+local function encode_base64(bytes)
+  local alphabet="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+  local chunks, block = {}, {}
+  for i=1,#bytes,3 do
+    local a,b,c=bytes:byte(i,i+2)
+    local n=a*65536+(b or 0)*256+(c or 0)
+    local function ch(index) return alphabet:sub(index+1,index+1) end
+    block[#block+1]=ch(math.floor(n/262144)%64)..ch(math.floor(n/4096)%64)..
+      (b and ch(math.floor(n/64)%64) or "=")..(c and ch(n%64) or "=")
+    if #block==4096 then chunks[#chunks+1]=table.concat(block);block={} end
+  end
+  if #block>0 then chunks[#chunks+1]=table.concat(block) end
+  return table.concat(chunks)
+end
+
+local IMAGE_CAPTURE_COMMANDS = {
+  ["draw.guarded"]=true, ["look.preview"]=true, ["look.preview.annotated"]=true,
+  ["look.filmstrip"]=true, ["look.onion"]=true, ["look.compare"]=true,
+}
+H["image.capture"] = function(args)
+  local command=need(args.command,"command")
+  if not IMAGE_CAPTURE_COMMANDS[command] then fault("invalid_args","Image capture only accepts preview commands.") end
+  local token=need(args.token,"token")
+  if type(token)~="string" or #token~=36 or not token:match("^[a-f0-9%-]+$") then fault("invalid_args","Invalid image capture token.") end
+  local inner={}
+  for k,v in pairs(args.args or {}) do inner[k]=v end
+  if command=="draw.guarded" and inner.mode~="preview" then
+    fault("invalid_args","Image capture cannot commit a drawing operation.")
+  end
+  local temporary=app.fs.joinPath(app.fs.tempPath,"aseprite-ai-artist-"..token..".png")
+  if app.fs.isFile(temporary) then fault("refused","Preview temporary file already exists; retry with a fresh token.") end
+  -- Ignore any caller-local path. These files never leave the editor's host.
+  inner.path=nil;inner.previewPath=nil
+  if command=="draw.guarded" then inner.previewPath=temporary else inner.path=temporary end
+  local file=nil
+  local ok,result=pcall(function()
+    local meta=H[command](inner)
+    local err
+    file,err=io.open(temporary,"rb")
+    if not file then fault("aseprite_error","Aseprite could not read its temporary preview PNG: "..tostring(err)) end
+    local length=file:seek("end")
+    -- Keep encoded PNG + metadata below the bridge's 16 MiB frame limit.
+    if not length or length>8*1024*1024 then fault("too_large","Preview PNG exceeds 8 MiB. Reduce the preview size.") end
+    file:seek("set",0)
+    local png=file:read("*a")
+    file:close();file=nil
+    if not png or #png~=length or png:sub(1,8)~="\137PNG\r\n\26\n" then
+      fault("aseprite_error","Aseprite did not produce a complete PNG preview.")
+    end
+    return {meta=meta,image={data=encode_base64(png),mimeType="image/png"}}
+  end)
+  if file then pcall(function() file:close() end) end
+  local removed,cleanupError=os.remove(temporary)
+  if not ok then error(result,0) end
+  if not removed then fault("aseprite_error","Could not remove the temporary preview PNG: "..tostring(cleanupError)) end
+  return result
+end
+
 local function handle_command(frame)
   local handler = H[frame.cmd]
   if not handler then
@@ -4345,7 +4405,7 @@ local function handle_command(frame)
       error = {
         code = "unsupported_command",
         message = "This Aseprite extension does not implement '" .. tostring(frame.cmd) ..
-          "'. Update it with `npx @pebbly/aseprite-ai-artist install-extension` and restart Aseprite.",
+          "'. Update it with the local checkout's `node dist/cli.js install-extension` and restart Aseprite.",
         details = { command = frame.cmd, extensionVersion = EXTENSION_VERSION },
       },
     }
@@ -4535,6 +4595,7 @@ _G.AI_ARTIST = {
   features = FEATURES,
   handlers = H,
   encodeJson = encode_json,
+  encodeBase64 = encode_base64,
   handleCommand = handle_command,
   toPlain = to_plain,
   blob47Masks = blob47_masks,

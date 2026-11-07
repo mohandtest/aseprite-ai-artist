@@ -4,6 +4,12 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 [semver](https://semver.org/).
 
+## 0.9.1 (local fork)
+
+- Fixed live previews with Windows Aseprite and a WSL MCP server. Temporary PNGs are now created, read and removed by Aseprite, and returned as bytes over the bridge rather than shared filenames.
+- Applied the same transport to guarded draw previews, normal/annotated previews, filmstrips, onion skins and comparisons. Old extensions refuse explicitly and require reinstallation; there is no filesystem fallback.
+- Added payload bounds, PNG validation, native cleanup tests and separate-host regression coverage.
+
 ## 0.9.0 (local fork)
 
 - Added structural observation, region fingerprints, bounded action diffs and annotated previews.

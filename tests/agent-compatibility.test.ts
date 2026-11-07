@@ -29,7 +29,7 @@ for (const scenario of ["preview", "guard", "patch"]) {
       measureOnly: false,
     });
     assert(reply.isError);
-    assert.deepEqual(calls, ["draw.guarded"]);
+    assert.deepEqual(calls, [scenario === "preview" ? "image.capture" : "draw.guarded"]);
   });
 }
 test("font identifiers cannot escape the bitmap font directory", () => {

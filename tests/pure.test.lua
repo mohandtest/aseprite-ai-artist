@@ -191,6 +191,13 @@ end)
 
 --------------------------------------------------------------------------------
 
+check("PNG transport base64 matches standard vectors including binary bytes",function()
+  local vectors={ [""]="",f="Zg==",fo="Zm8=",foo="Zm9v",foob="Zm9vYg==",fooba="Zm9vYmE=",foobar="Zm9vYmFy" }
+  for input,expected in pairs(vectors) do assert(A.encodeBase64(input)==expected,"base64 mismatch: "..input) end
+  assert(A.encodeBase64(string.char(0,255,128))=="AP+A","binary bytes")
+  assert(A.encodeBase64(string.rep("foo",4097))==string.rep("Zm9v",4097),"chunk boundary")
+end)
+
 print("")
 print(string.format("%d passed, %d failed", passed, failed))
 for _, f in ipairs(failures) do print("  - " .. f) end
