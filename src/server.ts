@@ -8,6 +8,7 @@ import { LinkSelector } from "./bridge/selector.js";
 import { findAsepriteBinary } from "./extension.js";
 import { loadRules, loadSkills, serverInstructions, type RuleDoc } from "./lib/skills.js";
 import { packageRoot, packageVersion } from "./lib/version.js";
+import { registerSpecTools } from "./tools/spec.js";
 import { registerAssetTools } from "./tools/assets.js";
 import { registerCraftTools } from "./tools/craft.js";
 import { registerDrawTools } from "./tools/draw.js";
@@ -92,6 +93,7 @@ export function createServer(opts: CreateServerOptions = {}): RunningServer {
   );
 
   registerSessionTools(server, live);
+  registerSpecTools(server, live);
   registerLookTools(server, live);
   registerDrawTools(server, live);
   registerStructureTools(server, live);

@@ -1,6 +1,10 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AsepriteLink } from "../bridge/link.js";
+import { actionableFinding } from "../lib/repair.js";
+import { analyzeRegion, compareMeasurements } from "../lib/analysis.js";
+import type { ArtSpec } from "../lib/art-spec.js";
+import type { PixelRegion } from "../lib/render.js";
 import { fail, hexColor, ok, targetShape } from "./kit.js";
 
 /**
@@ -90,9 +94,21 @@ export function registerCraftTools(server: McpServer, live: AsepriteLink): void 
     {
       title: "Validate",
       description:
-        "Lint a sprite against pixel-art rules and report concrete, located problems. Checks: off-palette colours, orphan/stray pixels, broken or doubled outlines, banding, semi-transparent (soft or resized) pixels, empty layers, untagged frames and uniform frame timing; `expect` adds per-layer frame ranges and layers that must not overlap. Symmetry and cross-frame volume drift are not checked — judge those with `look` op 'ascii' and 'filmstrip'. " +
+        "Lint a sprite against pixel-art rules and report concrete, located problems. Checks: off-palette colours, orphan/stray pixels, broken or doubled outlines, banding, semi-transparent (soft or resized) pixels, empty layers, untagged frames and uniform frame timing; `expect` adds per-layer frame ranges and layers that must not overlap. Optional motion reports area drift, centroid jumps and ground contact across explicit frames; loop includes last-to-first centroid comparison. mode=plan_repairs adds suggestions without applying them. " +
         "Run this before telling the user a sprite is finished. It answers 'is this actually done' with evidence rather than optimism.",
       inputSchema: {
+        mode: z.enum(["report", "plan_repairs"]).default("report"),
+        motion: z
+          .object({
+            layer: z.string(),
+            frames: z.array(z.number().int().positive()).min(2).max(64),
+            maxAreaDriftPercent: z.number().min(0).optional(),
+            maxCentroidJumpPx: z.number().min(0).optional(),
+            groundY: z.number().optional(),
+            groundContactFrames: z.array(z.number().int().positive()).optional(),
+            loop: z.boolean().default(false),
+          })
+          .optional(),
         sprite: targetShape.sprite,
         checks: z
           .array(
@@ -135,6 +151,9 @@ export function registerCraftTools(server: McpServer, live: AsepriteLink): void 
         score: z.number().int().min(0).max(100),
         findings: z.array(
           z.object({
+            code: z.string().optional(),
+            evidence: z.record(z.unknown()).optional(),
+            fixes: z.array(z.record(z.unknown())).optional(),
             check: z.string(),
             severity: z.enum(["error", "warning", "note"]),
             message: z.string(),
@@ -171,6 +190,50 @@ export function registerCraftTools(server: McpServer, live: AsepriteLink): void 
           // that makes an agent go looking for a workaround.
         }>("validate.run", args, { expect: ["findings"], timeoutMs: 120_000 });
 
+        const contract = await live.call<{ spec?: ArtSpec }>("spec.get", { sprite: args.sprite });
+        const motion = args.motion ?? contract.spec?.animation;
+        if (motion) {
+          const m = motion;
+          const samples = [];
+          for (const frame of m.frames) {
+            const r = await live.call<PixelRegion>("pixels.read", {
+              sprite: args.sprite,
+              layer: m.layer,
+              frame,
+              composite: false,
+            });
+            samples.push({ frame, a: analyzeRegion(r) });
+          }
+          const reference = samples[0]!.a;
+          for (let i = 0; i < samples.length; i++) {
+            const sample = samples[i]!;
+            const area = compareMeasurements(reference, sample.a).areaChangePercent;
+            const prev = i > 0 ? samples[i - 1] : m.loop ? samples.at(-1) : undefined;
+            const delta = prev ? compareMeasurements(prev.a, sample.a).centroidDelta : null;
+            const report = (message: string) =>
+              data.findings.push({
+                check: "motion",
+                severity: "warning",
+                message,
+                layer: m.layer,
+                frame: sample.frame,
+                at: null,
+                count: null,
+              });
+            if (m.maxAreaDriftPercent !== undefined && area !== null && Math.abs(area) > m.maxAreaDriftPercent)
+              report(`Area drift ${area.toFixed(2)}% from reference frame ${samples[0]!.frame}.`);
+            if (delta && m.maxCentroidJumpPx !== undefined && Math.hypot(delta.x, delta.y) > m.maxCentroidJumpPx)
+              report(`Centroid jump ${Math.hypot(delta.x, delta.y).toFixed(2)}px.`);
+            const b = sample.a.occupiedBounds;
+            if (
+              m.groundY !== undefined &&
+              m.groundContactFrames?.includes(sample.frame) &&
+              (!b || b.y + b.height - 1 !== m.groundY)
+            )
+              report(`Ground contact differs from expected y=${m.groundY}.`);
+          }
+        }
+        const findings = data.findings.map((f) => actionableFinding(f, args.mode === "plan_repairs"));
         const errors = data.findings.filter((f) => f.severity === "error");
         const warnings = data.findings.filter((f) => f.severity === "warning");
         const passed = errors.length === 0 && (!args.strict || warnings.length === 0);
@@ -181,7 +244,7 @@ export function registerCraftTools(server: McpServer, live: AsepriteLink): void 
           : `${errors.length} error(s), ${warnings.length} warning(s). Fix the errors before calling this done.`;
 
         return ok(
-          { ...data, passed, score, summary },
+          { ...data, findings, passed, score, summary },
           [
             summary,
             ...data.findings
