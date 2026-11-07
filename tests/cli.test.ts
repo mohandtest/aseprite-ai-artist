@@ -190,3 +190,9 @@ test("matching versions stay a tick", () => {
   });
   assert.match(extension, /^✓ Aseprite extension/);
 });
+
+test("local installer never redirects the fork to the upstream npm package", async () => {
+  const {stdout}=await run(process.execPath,["dist/cli.js","install","codex","--project","--dry-run"]);
+  assert.match(stdout,/dist[\\/]cli\.js/);
+  assert.doesNotMatch(stdout,/@pebbly|@latest|npx/);
+});

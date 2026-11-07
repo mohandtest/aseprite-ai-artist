@@ -2075,6 +2075,8 @@ check("layer op 'duplicate' with toSprite copies cels, suffixes name clashes, re
   if not ok then error(err, 0) end
 end)
 
+dofile(root .. "/tests/agent-extension.lua")(check, withMockSprite, call, assertEq)
+
 sprite:close()
 
 print("")

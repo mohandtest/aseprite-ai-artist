@@ -4,12 +4,8 @@ import path from "node:path";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AsepriteLink } from "../bridge/link.js";
-import {
-  PixelRegion,
-  filmstripLayout,
-  renderAscii,
-  renderDiff,
-} from "../lib/render.js";
+import { PixelRegion, filmstripLayout, renderAscii, renderDiff } from "../lib/render.js";
+import { analyzeRegion, compareMeasurements } from "../lib/analysis.js";
 import { fail, ok, okWithImage, targetShape } from "./kit.js";
 
 /**
@@ -29,28 +25,29 @@ export function registerLookTools(server: McpServer, live: AsepriteLink): void {
         "• 'onion' — the target frame at full opacity over ghosted neighbouring frames, oldest-first. Use to check in-betweens and spacing while animating, without stepping through frames one at a time. Over an opaque background the target hides every ghost — pass `layer` to onion-skin just the part that moves.\n" +
         "• 'diff' — a pixel-level text diff between two frames: '.' unchanged, '-' erased, glyph = the new colour. Use it to confirm exactly what an edit touched.\n" +
         "• 'compare' — the reference layer (left, full opacity) beside the art without any reference layer (right), same frame, same scale. Use it when drawing from a concept or storyboard: name the few largest mismatches and fix only those.\n" +
+        "• analyze: deterministic bounds, occupancy, components, symmetry and color counts; frames adds temporal deltas. action_diff: cached before/after summary from draw actionId.\n" +
         "Draw, then look, then fix. Do not report a sprite finished without looking at it.",
       inputSchema: {
-        op: z.enum(["preview", "ascii", "filmstrip", "diff", "onion", "compare"]).default("preview"),
+        op: z
+          .enum(["preview", "ascii", "filmstrip", "diff", "onion", "compare", "analyze", "action_diff"])
+          .default("preview"),
+        connectivity: z.union([z.literal(4), z.literal(8)]).default(8),
+        maxComponents: z.number().int().min(0).max(100).default(20),
+        rowWidths: z.boolean().default(false),
+        frames: z
+          .array(z.number().int().positive())
+          .min(1)
+          .max(64)
+          .optional()
+          .describe("Analyze: explicit frame numbers; comparisons follow supplied order."),
+        actionId: z.string().optional().describe("action_diff: ID from a successful draw."),
         sprite: targetShape.sprite,
         frame: targetShape.frame,
         reference: z.string().optional().describe("Compare: the reference layer. Default 'reference'."),
         fromFrame: z.number().int().positive().optional().describe("Diff: the earlier frame."),
         toFrame: z.number().int().positive().optional().describe("Diff: the later frame."),
-        framesBefore: z
-          .number()
-          .int()
-          .min(0)
-          .max(8)
-          .default(1)
-          .describe("Onion: ghost frames before the target."),
-        framesAfter: z
-          .number()
-          .int()
-          .min(0)
-          .max(8)
-          .default(1)
-          .describe("Onion: ghost frames after the target."),
+        framesBefore: z.number().int().min(0).max(8).default(1).describe("Onion: ghost frames before the target."),
+        framesAfter: z.number().int().min(0).max(8).default(1).describe("Onion: ghost frames after the target."),
         ghostOpacity: z
           .number()
           .int()
@@ -70,13 +67,24 @@ export function registerLookTools(server: McpServer, live: AsepriteLink): void {
         layer: z
           .string()
           .optional()
-          .describe("Read a single layer instead of the composited image. Honoured by preview, ascii, diff, filmstrip and onion; compare has its own `reference`."),
+          .describe(
+            "Read a single layer instead of the composited image. Honoured by preview, ascii, diff, filmstrip and onion; compare has its own `reference`.",
+          ),
         rulers: z
           .boolean()
           .default(true)
           .describe(
             "ascii: false drops the coordinate rulers and row labels, leaving rows you can edit and pass straight to `draw` kind 'grid' with the reported origin.",
           ),
+        overlays: z
+          .object({
+            grid: z.boolean().default(false),
+            rulers: z.boolean().default(false),
+            checkerboard: z.boolean().default(false),
+            bounds: z.boolean().default(false),
+          })
+          .optional()
+          .describe("Preview only: image grid, sprite-global coordinate rulers, checkerboard and occupied bounds."),
         scale: z
           .number()
           .int()
@@ -88,17 +96,26 @@ export function registerLookTools(server: McpServer, live: AsepriteLink): void {
           ),
       },
       outputSchema: {
+        analysis: z.record(z.unknown()).optional(),
+        measurements: z.array(z.record(z.unknown())).optional(),
+        fingerprint: z.string().optional(),
+        action: z.record(z.unknown()).optional(),
         op: z.string(),
         sprite: z.string(),
         width: z.number().int(),
         height: z.number().int(),
         scale: z.number().int().optional(),
         text: z.string().optional().describe("The grid, for 'ascii' and 'diff'."),
-        legend: z.record(z.string()).optional().describe("glyph → #rrggbb. Palette colours keep the same glyph across every read of the sprite."),
+        legend: z
+          .record(z.string())
+          .optional()
+          .describe("glyph → #rrggbb. Palette colours keep the same glyph across every read of the sprite."),
         offPalette: z
           .array(z.string())
           .optional()
-          .describe("ascii/diff: glyphs whose colour is not in the palette. Their assignment can change between reads — do not reuse them across regions."),
+          .describe(
+            "ascii/diff: glyphs whose colour is not in the palette. Their assignment can change between reads — do not reuse them across regions.",
+          ),
         gridRows: z
           .array(z.string())
           .optional()
@@ -124,11 +141,52 @@ export function registerLookTools(server: McpServer, live: AsepriteLink): void {
     async (args) => {
       try {
         switch (args.op) {
+          case "action_diff": {
+            const action = await live.call<Record<string, unknown>>("look.action_diff", {
+              sprite: args.sprite,
+              actionId: args.actionId,
+            });
+            return ok({
+              op: args.op,
+              sprite: String(action.sprite),
+              width: Number(action.width),
+              height: Number(action.height),
+              action,
+            });
+          }
+          case "analyze": {
+            const frames = args.frames ?? [args.frame];
+            const measurements: Record<string, unknown>[] = [];
+            let previous: ReturnType<typeof analyzeRegion> | undefined;
+            let last: NamedRegion | undefined;
+            for (const frame of frames) {
+              const region = await readRegion(live, { ...args, frame });
+              const analysis = analyzeRegion(region, args);
+              measurements.push({
+                frame: region.frame,
+                fingerprint: region.fingerprint,
+                ...analysis,
+                ...(previous ? { delta: compareMeasurements(previous, analysis) } : {}),
+              });
+              previous = analysis;
+              last = region;
+            }
+            return ok({
+              op: args.op,
+              sprite: last!.spriteName,
+              width: last!.width,
+              height: last!.height,
+              fingerprint: last!.fingerprint,
+              analysis: previous!,
+              measurements,
+            });
+          }
           case "ascii": {
             const [region, palette] = await Promise.all([readRegion(live, args), readPalette(live, args.sprite)]);
             const view = renderAscii(region, { showRulers: args.rulers, palette });
             return ok(
               {
+                fingerprint: region.fingerprint,
                 op: "ascii",
                 sprite: region.spriteName,
                 width: view.width,
@@ -288,13 +346,14 @@ export function registerLookTools(server: McpServer, live: AsepriteLink): void {
               height: number;
               scale: number;
             }>(
-              "look.preview",
+              args.overlays ? "look.preview.annotated" : "look.preview",
               {
                 sprite: args.sprite,
                 frame: args.frame,
                 layer: args.layer,
                 region: args.region,
                 path: out,
+                overlays: args.overlays,
                 // Omitted scale means the extension picks one from the sprite size.
                 scale: args.scale,
               },
@@ -343,6 +402,7 @@ export function registerLookTools(server: McpServer, live: AsepriteLink): void {
           .describe("Read the flattened image. False reads only the target layer's cel."),
       },
       outputSchema: {
+        fingerprint: z.string().optional(),
         sprite: z.string(),
         x: z.number().int(),
         y: z.number().int(),
@@ -359,6 +419,7 @@ export function registerLookTools(server: McpServer, live: AsepriteLink): void {
         const region = await readRegion(live, args);
         return ok(
           {
+            fingerprint: region.fingerprint,
             sprite: region.spriteName,
             x: region.x,
             y: region.y,
@@ -379,6 +440,8 @@ export function registerLookTools(server: McpServer, live: AsepriteLink): void {
 
 interface NamedRegion extends PixelRegion {
   spriteName: string;
+  fingerprint?: string;
+  frame?: number;
 }
 
 async function readRegion(
@@ -393,6 +456,8 @@ async function readRegion(
 ): Promise<NamedRegion> {
   const data = await live.call<{
     sprite: string;
+    fingerprint?: string;
+    frame?: number;
     x: number;
     y: number;
     width: number;
@@ -422,9 +487,7 @@ async function readPalette(live: AsepriteLink, sprite: string | undefined): Prom
 }
 
 function offPaletteNote(glyphs: string[]): string {
-  return glyphs.length === 0
-    ? ""
-    : `\nOff-palette (glyphs not stable between reads): ${glyphs.join(" ")}`;
+  return glyphs.length === 0 ? "" : `\nOff-palette (glyphs not stable between reads): ${glyphs.join(" ")}`;
 }
 
 function tempPng(prefix: string): string {

@@ -15,12 +15,12 @@
 --------------------------------------------------------------------------------
 
 local PROTOCOL_VERSION = 1
-local EXTENSION_VERSION = "0.8.2"
+local EXTENSION_VERSION = "0.9.0"
 
 -- Optional capabilities. The wire version stays 1 across builds; new command
 -- families are gated on these flags plus the loud unsupported_command reply,
 -- so an older extension degrades visibly rather than mysteriously.
-local FEATURES = { "draw_batch", "recolor", "validate", "tileset", "reference", "filmstrip" }
+local FEATURES = { "guarded_draw", "draw_preview", "region_fingerprint", "art_spec", "draw_batch", "recolor", "validate", "tileset", "reference", "filmstrip" }
 
 -- The truthy set src/cli.ts accepts, so a value that enables the tool on the
 -- server cannot fail to enable the capability here.
@@ -99,10 +99,13 @@ local function pixel_to_hex(sprite, value)
     if value == sprite.transparentColor then return nil end
     local pal = sprite.palettes[1]
     if value >= #pal then return nil end
-    return color_to_hex(pal:getColor(value), false)
+    local c=pal:getColor(value)
+    if c.alpha==0 then return nil end
+    return color_to_hex(c, true)
   elseif sprite.colorMode == ColorMode.GRAY then
     local v, a = pc.grayaV(value), pc.grayaA(value)
     if a == 0 then return nil end
+    if a<255 then return string.format("#%02x%02x%02x%02x",v,v,v,a) end
     return string.format("#%02x%02x%02x", v, v, v)
   else
     local a = pc.rgbaA(value)
@@ -133,12 +136,13 @@ end
 local function color_to_pixel(sprite, color)
   local pc = app.pixelColor
   if sprite.colorMode == ColorMode.INDEXED then
+    if color.alpha==0 then return sprite.transparentColor end
     local pal = sprite.palettes[1]
     local best, best_d = 0, math.huge
     for i = 0, #pal - 1 do
       local p = pal:getColor(i)
       local d = (p.red - color.red) ^ 2 + (p.green - color.green) ^ 2 + (p.blue - color.blue) ^ 2
-      if d < best_d then best, best_d = i, d end
+      if i~=sprite.transparentColor and d < best_d then best, best_d = i, d end
     end
     return best
   elseif sprite.colorMode == ColorMode.GRAY then
@@ -449,10 +453,12 @@ local function read_region(sprite, layer, frame, region, composite)
 
   if composite then
     source = Image(sprite.width, sprite.height, sprite.colorMode)
+    source:clear(sprite.colorMode==ColorMode.INDEXED and sprite.transparentColor or 0)
     source:drawSprite(sprite, frame)
   else
     local cel = get_cel(sprite, layer, frame, false)
     source = Image(sprite.width, sprite.height, sprite.colorMode)
+    source:clear(sprite.colorMode==ColorMode.INDEXED and sprite.transparentColor or 0)
     if cel then source:drawImage(cel.image, cel.position) end
   end
 
@@ -1061,11 +1067,44 @@ H["sprite.manage"] = function(args)
   fault("unsupported_command", "sprite.manage does not support op '" .. tostring(op) .. "'.")
 end
 
+-- Non-cryptographic content token, computed at the execution boundary. Includes
+-- identity, raw pixel indices/alpha, and palette so palette edits invalidate it.
+local function region_fingerprint(s, layer, frame, region)
+  local r = region and clamp_region(s, region) or {x=0,y=0,width=s.width,height=s.height}
+  local h1, h2 = 1, 7
+  local function feed(value)
+    local text = tostring(value) .. ":"
+    for i=1,#text do
+      h1 = (h1 * 131 + text:byte(i)) % 2147483647
+      h2 = (h2 * 137 + text:byte(i)) % 2147483629
+    end
+  end
+  feed(s.id); feed(layer and layer.id or "composite"); feed(frame.frameNumber)
+  feed(r.x);feed(r.y);feed(r.width);feed(r.height);feed(s.transparentColor)
+  -- Palette collections throw on index #palettes+1, so ipairs is unsafe.
+  for pi=1,#s.palettes do
+    local pal=s.palettes[pi]
+    for i=0,#pal-1 do feed(color_to_hex(pal:getColor(i),true)) end
+  end
+  local image = Image(s.width,s.height,s.colorMode)
+  image:clear(s.colorMode==ColorMode.INDEXED and s.transparentColor or 0)
+  if layer then
+    local cel = layer:cel(frame)
+    if cel then image:drawImage(cel.image,cel.position) end
+  else image:drawSprite(s,frame) end
+  for y=r.y,r.y+r.height-1 do for x=r.x,r.x+r.width-1 do feed(image:getPixel(x,y)) end end
+  return string.format("reg_%d_%d",h1,h2)
+end
+
 H["pixels.read"] = function(args)
   local s = find_sprite(args.sprite)
-  local layer = args.composite and nil or find_layer(s, args.layer)
-  local frame = find_frame(s, args.frame)
-  return read_region(s, layer, frame, args.region, args.composite ~= false)
+  local layer = nil
+  if args.composite == false then layer = find_layer(s,args.layer) end
+  local frame = find_frame(s,args.frame)
+  local result = read_region(s,layer,frame,args.region,args.composite ~= false)
+  result.fingerprint = region_fingerprint(s,layer,frame,args.region)
+  result.frame = frame.frameNumber
+  return result
 end
 
 --------------------------------------------------------------------------------
@@ -1097,11 +1136,54 @@ end
 --- stay readable over an opaque background, which otherwise hides every ghost.
 local function frame_image(s, frame, layer_name)
   local img = Image(s.width, s.height, s.colorMode)
+  img:clear(s.colorMode==ColorMode.INDEXED and s.transparentColor or 0)
   if layer_name then
     local cel = get_cel(s, find_layer(s, layer_name), frame, false)
     if cel then img:drawImage(cel.image, cel.position) end
   else
     img:drawSprite(s, frame)
+  end
+  return img
+end
+
+local function preview_overlay(s,cropped,region,scale,options)
+  local margin=options.rulers and 12 or 0
+  local w,h=region.width*scale+margin,region.height*scale+margin
+  local img=Image(w,h,ColorMode.RGB)
+  local bg=app.pixelColor.rgba(28,28,32,255)
+  img:clear(bg)
+  local minx,miny,maxx,maxy=region.width,region.height,-1,-1
+  for y=0,region.height-1 do for x=0,region.width-1 do
+    local hex=pixel_to_hex(s,cropped:getPixel(x,y))
+    local c=hex and hex_to_color(hex) or nil
+    if c then minx=math.min(minx,x);miny=math.min(miny,y);maxx=math.max(maxx,x);maxy=math.max(maxy,y) end
+    for yy=0,scale-1 do for xx=0,scale-1 do
+      local base=options.checkerboard and (((math.floor((x*scale+xx)/8)+math.floor((y*scale+yy)/8))%2==0) and 150 or 190) or 28
+      local alpha=c and c.alpha/255 or 0
+      local value=app.pixelColor.rgba(math.floor((c and c.red or 0)*alpha+base*(1-alpha)),math.floor((c and c.green or 0)*alpha+base*(1-alpha)),math.floor((c and c.blue or 0)*alpha+base*(1-alpha)),255)
+      if options.grid and scale>=4 and (xx==0 or yy==0) then value=app.pixelColor.rgba(65,65,72,255) end
+      img:drawPixel(margin+x*scale+xx,margin+y*scale+yy,value)
+    end end
+  end end
+  local bright=app.pixelColor.rgba(255,190,60,255)
+  if options.bounds and maxx>=minx then
+    local x0,y0=margin+minx*scale,margin+miny*scale
+    local x1,y1=margin+(maxx+1)*scale-1,margin+(maxy+1)*scale-1
+    for x=x0,x1 do img:drawPixel(x,y0,bright);img:drawPixel(x,y1,bright) end
+    for y=y0,y1 do img:drawPixel(x0,y,bright);img:drawPixel(x1,y,bright) end
+  end
+  if options.rulers then
+    local digits={ ["0"]={"111","101","101","101","111"},["1"]={"010","110","010","010","111"},["2"]={"111","001","111","100","111"},["3"]={"111","001","111","001","111"},["4"]={"101","101","111","001","001"},["5"]={"111","100","111","001","111"},["6"]={"111","100","111","101","111"},["7"]={"111","001","010","010","010"},["8"]={"111","101","111","101","111"},["9"]={"111","101","111","001","111"},["-"]={"000","000","111","000","000"}}
+    local function label(text,px,py,vertical)
+      for i=1,#text do for yy,row in ipairs(digits[text:sub(i,i)] or {}) do for xx=1,3 do
+        local x,y=px+(i-1)*4+xx-1,py+yy-1
+        if vertical then x,y=px+xx-1,py+(i-1)*6+yy-1 end
+        if row:sub(xx,xx)=="1" and x<w and y<h then img:drawPixel(x,y,bright) end
+      end end end
+    end
+    local step=math.max(1,math.ceil(32/scale))
+    for x=0,region.width-1,step do label(tostring(region.x+x),margin+x*scale,1,false) end
+    for y=0,region.height-1,step do label(tostring(region.y+y),1,margin+y*scale,true) end
   end
   return img
 end
@@ -1123,12 +1205,16 @@ H["look.preview"] = function(args)
   -- The scratch sprite is created inside preserving_site so the user's active
   -- document is what gets restored, not the throwaway we just closed.
   preserving_site(function()
-    local out = Sprite(region.width, region.height, s.colorMode)
-    if s.colorMode == ColorMode.INDEXED then out:setPalette(s.palettes[1]) end
-    out.cels[1].image = cropped
-    if scale > 1 then out:resize(region.width * scale, region.height * scale) end
-    out:saveCopyAs(path)
+    local overlay=args.overlays and preview_overlay(s,cropped,region,scale,args.overlays) or nil
+    local out=Sprite(overlay and overlay.width or region.width,overlay and overlay.height or region.height,overlay and ColorMode.RGB or s.colorMode)
+    local saved,err=pcall(function()
+      if not overlay and s.colorMode==ColorMode.INDEXED then out:setPalette(s.palettes[1]);out.transparentColor=s.transparentColor end
+      out.cels[1].image=overlay or cropped
+      if not overlay and scale>1 then out:resize(region.width*scale,region.height*scale) end
+      out:saveCopyAs(path)
+    end)
     out:close()
+    if not saved then error(err,0) end
   end)
 
   return {
@@ -1138,6 +1224,8 @@ H["look.preview"] = function(args)
     scale = scale,
   }
 end
+
+H["look.preview.annotated"] = H["look.preview"]
 
 H["look.filmstrip"] = function(args)
   local s = find_sprite(args.sprite)
@@ -1355,7 +1443,7 @@ local function op_bounds(sprite, op)
     }
   end
 
-  if op.kind == "pixels" then return pts(op.points) end
+  if op.kind == "pixels" or op.kind == "grid_patch" then return pts(op.points) end
   if op.kind == "line" then
     return pad(pts({ op.from, op.to }), math.floor((op.thickness or 1) / 2))
   end
@@ -1376,6 +1464,48 @@ local function op_bounds(sprite, op)
   return { x = 0, y = 0, width = sprite.width, height = sprite.height }
 end
 
+-- Document userdata identity prevents accidental attachment by reused filename.
+local document_specs = {}
+local function current_spec(s)
+  local open={}
+  for _,doc in ipairs(app.sprites) do open[doc.id]=true end
+  for id,_ in pairs(document_specs) do if not open[id] then document_specs[id]=nil end end
+  return document_specs[s.id]
+end
+H["spec.get"] = function(args)
+  local s=find_sprite(args.sprite)
+  return {sprite=sprite_display_name(s),spec=current_spec(s)}
+end
+H["spec.set"] = function(args)
+  local s=find_sprite(args.sprite)
+  document_specs[s.id]=need(args.spec,"spec")
+  return H["spec.get"](args)
+end
+H["spec.validate"] = function(args)
+  local s=find_sprite(args.sprite); local spec=current_spec(s); local issues={}
+  if not spec then issues[1]="No PixelSpec attached."; return {sprite=sprite_display_name(s),issues=issues} end
+  local size=(spec.hard or {}).canvasSize or (spec.goal or {}).size
+  if size and (s.width~=size[1] or s.height~=size[2]) then issues[#issues+1]="Canvas size differs from spec." end
+  for name,_ in pairs(spec.layers or {}) do
+    local found=false
+    for _,l in ipairs(flatten_layers(s.layers,nil,{})) do if l.name==name then found=true end end
+    if not found then issues[#issues+1]="Missing layer: "..name end
+  end
+  if spec.animation then for _,fn in ipairs(spec.animation.frames or {}) do
+    if fn>#s.frames then issues[#issues+1]="Missing animation frame: "..fn end
+  end end
+  return {sprite=sprite_display_name(s),spec=spec,issues=issues}
+end
+
+local action_history, action_order, action_sequence = {}, {}, 0
+
+H["look.action_diff"] = function(args)
+  local s = find_sprite(args.sprite)
+  local action = action_history[need(args.actionId,"actionId")]
+  if not action or action.spriteId ~= s.id then fault("action_not_found","Action expired or belongs to another document.") end
+  return action
+end
+
 H["draw.batch"] = function(args)
   local s = find_sprite(args.sprite)
   local layer = find_layer(s, args.layer)
@@ -1385,6 +1515,18 @@ H["draw.batch"] = function(args)
     fault("invalid_args", "'" .. layer.name .. "' is a group layer and holds no pixels. Target a child layer.")
   end
 
+  if layer.isTilemap then fault("preview_unsupported","Raster drawing does not support tilemap cels.") end
+  local guard = args.guard or {}
+  local spec = current_spec(s) or {}
+  local hard = spec.hard or {}
+  if hard.canvasSize and (s.width~=hard.canvasSize[1] or s.height~=hard.canvasSize[2]) then
+    fault("spec_constraint_failed","Canvas differs from hard PixelSpec constraint.")
+  end
+  if hard.paletteOnly and args.paletteLock==false then fault("spec_constraint_failed","PixelSpec requires palette lock.") end
+  local beforeFingerprint = region_fingerprint(s,layer,frame,guard.fingerprintRegion)
+  if guard.expectedRegionFingerprint and guard.expectedRegionFingerprint ~= beforeFingerprint then
+    fault("stale_region","Target pixels, identity or palette changed. Inspect again before retrying.")
+  end
   local snapped = {}
   local seen_snap = {}
 
@@ -1427,12 +1569,12 @@ H["draw.batch"] = function(args)
   end
 
   Draw.mask = selection
-  local ok, err = pcall(transact, args.label and ("AI: " .. args.label) or "AI: draw", function()
-    local cel = get_cel(s, layer, frame, args.createCel ~= false)
-    if not cel then
-      fault("invalid_args", "No cel on '" .. layer.name .. "' frame " .. frame.frameNumber ..
-        " and createCel is false.")
-    end
+  local pendingImage, pendingPosition, originalCel
+  local changes, exactBounds, exactCount, outside = {}, nil, 0, 0
+  local ok, err = pcall(function()
+    local cel = get_cel(s, layer, frame, false)
+    originalCel = cel
+    if not cel and args.createCel == false then fault("invalid_args","No cel and createCel is false.") end
 
     -- Grow once for the whole batch rather than per op.
     local needed = nil
@@ -1448,14 +1590,44 @@ H["draw.batch"] = function(args)
         end
       end
     end
-    if needed then cel = ensure_cel_covers(s, cel, needed) end
-
-    local img = cel.image:clone()
-    local ox, oy = cel.position.x, cel.position.y
+    local ox,oy,ex,ey = 0,0,s.width,s.height
+    if cel then
+      if cel.image.width*cel.image.height>4000000 then fault("preview_unsupported","Source cel exceeds raster budget.") end
+      -- Retain real off-canvas ink, but not transparent padding left by an
+      -- outline/clear cycle. Otherwise every repeated outline grows the cel.
+      if cel.position.x<0 or cel.position.y<0 or cel.position.x+cel.image.width>s.width or cel.position.y+cel.image.height>s.height then
+        for y=0,cel.image.height-1 do for x=0,cel.image.width-1 do
+          local gx,gy=x+cel.position.x,y+cel.position.y
+          if (gx<0 or gy<0 or gx>=s.width or gy>=s.height) and pixel_to_hex(s,cel.image:getPixel(x,y)) then
+            ox=math.min(ox,gx);oy=math.min(oy,gy);ex=math.max(ex,gx+1);ey=math.max(ey,gy+1)
+          end
+        end end
+      end
+    end
+    -- Bound scratch memory before allocating; retain off-canvas existing art.
+    if (ex-ox)*(ey-oy)>4000000 then fault("preview_unsupported","Raster exceeds four million pixels.") end
+    local img = Image(ex-ox,ey-oy,s.colorMode)
+    img:clear(s.colorMode == ColorMode.INDEXED and s.transparentColor or 0)
+    if cel then img:drawImage(cel.image,Point(cel.position.x-ox,cel.position.y-oy)) end
+    local beforeImage = img:clone()
+    -- Clip writes to canvas as before, while retaining existing off-canvas pixels.
+    local canvasMask = selection
+    if not canvasMask then canvasMask = Selection(); canvasMask:add(Rectangle(0,0,s.width,s.height)) end
+    Draw.mask = canvasMask
 
     for _, op in ipairs(ops) do
       local kind = op.kind
-      if kind == "pixels" then
+      if kind == "grid_patch" then
+        for _,p in ipairs(op.points) do
+          local lx,ly=p.x-ox,p.y-oy
+          if p.x<0 or p.y<0 or p.x>=s.width or p.y>=s.height then fault("invalid_patch","Patch is outside canvas.") end
+          local actual = pixel_to_hex(s,img:getPixel(lx,ly)) or "#00000000"
+          local expectedColor=hex_to_color(p.expectedColor)
+          local expected=expectedColor.alpha==0 and "#00000000" or color_to_hex(expectedColor,true)
+          if actual ~= expected then fault("stale_region","Patch expectedColor mismatch at "..p.x..","..p.y) end
+          Draw.pixel(img,ox,oy,p.x,p.y,resolve(p.newColor))
+        end
+      elseif kind == "pixels" then
         local fallback = resolve(op.color)
         for _, p in ipairs(op.points) do
           local value = p.color and resolve(p.color) or fallback
@@ -1601,23 +1773,90 @@ H["draw.batch"] = function(args)
       extend(op_bounds(s, op))
     end
 
-    cel.image = img
+    for y=0,img.height-1 do for x=0,img.width-1 do
+      local old,new=beforeImage:getPixel(x,y),img:getPixel(x,y)
+      if old~=new then
+        exactCount=exactCount+1
+        local gx,gy=x+ox,y+oy
+        local a=guard.allowedRegion
+        for _,protected in ipairs(spec.protectedRegions or {}) do
+          local pr=protected.region
+          if protected.layer==layer.name and (not protected.frame or protected.frame==frame.frameNumber)
+            and gx>=pr.x and gy>=pr.y and gx<pr.x+pr.width and gy<pr.y+pr.height then
+            fault("spec_constraint_failed","Edit would alter a protected PixelSpec region.")
+          end
+        end
+        if a and (gx<a.x or gy<a.y or gx>=a.x+a.width or gy>=a.y+a.height) then outside=outside+1 end
+        if not exactBounds then exactBounds={x=gx,y=gy,width=1,height=1}
+        else
+          local x0,y0=math.min(exactBounds.x,gx),math.min(exactBounds.y,gy)
+          local x1,y1=math.max(exactBounds.x+exactBounds.width,gx+1),math.max(exactBounds.y+exactBounds.height,gy+1)
+          exactBounds={x=x0,y=y0,width=x1-x0,height=y1-y0}
+        end
+        if #changes<4096 then changes[#changes+1]={x=gx,y=gy,before=pixel_to_hex(s,old) or "#00000000",after=pixel_to_hex(s,new) or "#00000000"} end
+      end
+    end end
+    if outside>0 then fault("protected_region_changed","Edit would change "..outside.." pixels outside allowedRegion.") end
+    if guard.maxChangedPixels and exactCount>guard.maxChangedPixels then fault("change_budget_exceeded","Edit exceeds maxChangedPixels.") end
+    if guard.maxChangedFractionOfOpaqueTarget then
+      local opaque=0
+      for y=0,beforeImage.height-1 do for x=0,beforeImage.width-1 do
+        if pixel_to_hex(s,beforeImage:getPixel(x,y)) then opaque=opaque+1 end
+      end end
+      if exactCount>opaque*guard.maxChangedFractionOfOpaqueTarget then fault("change_budget_exceeded","Edit exceeds opaque-target fraction.") end
+    end
+    pendingImage,pendingPosition=img,Point(ox,oy)
   end)
   -- Cleared on every path: a mask left behind would clip the next batch,
   -- which may not have asked for selectionOnly at all.
   Draw.mask = nil
   if not ok then error(err, 0) end
-
+  local preview = args.mode == "preview"
+  if preview and args.previewPath then
+    preserving_site(function()
+      local out=Sprite(pendingImage.width,pendingImage.height,s.colorMode)
+      local saved,saveError=pcall(function()
+        if s.colorMode==ColorMode.INDEXED then out:setPalette(s.palettes[1]);out.transparentColor=s.transparentColor end
+        out.cels[1].image=pendingImage
+        local scale=pick_scale(out.width,out.height,nil)
+        if scale>1 then out:resize(out.width*scale,out.height*scale) end
+        out:saveCopyAs(args.previewPath)
+      end)
+      out:close()
+      if not saved then error(saveError,0) end
+    end)
+  end
+  local actionId = nil
+  if not preview and exactCount>0 then
+    -- No document mutation occurred before this point. This handler runs
+    -- synchronously on Aseprite's UI thread, so checking then committing is atomic.
+    preserving_site(function()
+      app.sprite=s
+      transact(args.label and ("AI: "..args.label) or "AI: draw",function()
+        if originalCel then originalCel.image=pendingImage; originalCel.position=pendingPosition
+        else s:newCel(layer,frame,pendingImage,pendingPosition) end
+      end)
+    end)
+    action_sequence=action_sequence+1; actionId="act_"..action_sequence
+    action_history[actionId]={sprite=sprite_display_name(s),spriteId=s.id,width=s.width,height=s.height,
+      layer=layer.name,frame=frame.frameNumber,changes=changes,pixelsChanged=exactCount,bounds=exactBounds,
+      truncated=exactCount>#changes,beforeFingerprint=beforeFingerprint,
+      afterFingerprint=region_fingerprint(s,layer,frame,guard.fingerprintRegion)}
+    action_order[#action_order+1]=actionId
+    if #action_order>16 then action_history[table.remove(action_order,1)]=nil end
+  end
   return {
-    sprite = sprite_display_name(s),
-    layer = layer.name,
-    frame = frame.frameNumber,
-    opsApplied = #ops,
-    pixelsChanged = changed,
-    colorsSnapped = snapped,
-    bounds = union,
+    sprite=sprite_display_name(s),layer=layer.name,frame=frame.frameNumber,
+    opsApplied=#ops,pixelsChanged=exactCount,colorsSnapped=snapped,bounds=exactBounds,
+    applied=not preview,preview=preview,actionId=actionId,beforeFingerprint=beforeFingerprint,
+    afterFingerprint=not preview and region_fingerprint(s,layer,frame,guard.fingerprintRegion) or nil,
+    outsideAllowedRegionChanged=outside,changes=preview and changes or nil,truncated=preview and exactCount>#changes or nil,
   }
 end
+
+-- A distinct command makes older extensions reject guarded edits instead of
+-- ignoring unfamiliar arguments and accidentally committing a preview.
+H["draw.guarded"] = H["draw.batch"]
 
 --------------------------------------------------------------------------------
 -- Structure: layers, frames, tags, cels
@@ -2051,11 +2290,14 @@ H["cel.apply"] = function(args)
         fault("invalid_args", "cel op 'tween' needs toFrame > fromFrame.")
       end
       local property = need(args.property, "property")
-      if property ~= "position" and property ~= "opacity" then
+      if property ~= "position" and property ~= "opacity" and property ~= "scale" then
         fault("invalid_args", "cel op 'tween' property must be 'position' or 'opacity'.")
       end
       local to = need(args.to, "to")
       local easing = args.easing or "linear"
+      if property=="scale" and (not args.allowLossy or type(to)~="number" or to<0.125 or to>8) then
+        fault("invalid_args","Scale tween requires allowLossy=true and numeric to between 0.125 and 8.")
+      end
 
       local srcCel = get_cel(s, layer, fromFrame, false)
       if not srcCel then
@@ -2067,7 +2309,14 @@ H["cel.apply"] = function(args)
       else
         start = srcCel.opacity
       end
-      local baseImage, basePosition = srcCel.image, srcCel.position
+      local baseImage, basePosition = srcCel.image:clone(), srcCel.position
+      if property=="scale" then
+        start=1
+        local maxFactor=math.max(1,to)
+        if math.max(1,math.floor(baseImage.width*maxFactor+0.5))*math.max(1,math.floor(baseImage.height*maxFactor+0.5))>4000000 then
+          fault("invalid_args","Scaled cel exceeds raster budget.")
+        end
+      end
 
       local function ease(t)
         if easing == "linear" then return t
@@ -2090,7 +2339,18 @@ H["cel.apply"] = function(args)
         -- once, undoing the whole point of a tween.
         if not cel then cel = s:newCel(layer, frameObj, baseImage:clone(), basePosition) end
 
-        if property == "position" then
+        if property == "scale" then
+          local t=ease((fn-fromFrame.frameNumber)/span)
+          local factor=1+(to-1)*t
+          local w,h=math.max(1,math.floor(baseImage.width*factor+0.5)),math.max(1,math.floor(baseImage.height*factor+0.5))
+          if w*h>4000000 then fault("invalid_args","Scaled cel exceeds raster budget.") end
+          local image=Image(w,h,s.colorMode)
+          for y=0,h-1 do for x=0,w-1 do image:drawPixel(x,y,baseImage:getPixel(math.min(baseImage.width-1,math.floor(x*baseImage.width/w)),math.min(baseImage.height-1,math.floor(y*baseImage.height/h)))) end end
+          cel.image=image
+          local anchor=args.anchor or {x=basePosition.x,y=basePosition.y}
+          cel.position=Point(math.floor(anchor.x+(basePosition.x-anchor.x)*factor+0.5),math.floor(anchor.y+(basePosition.y-anchor.y)*factor+0.5))
+          frames_touched[#frames_touched+1]={frame=fn,scale=factor}
+        elseif property == "position" then
           local x, y
           if fn == fromFrame.frameNumber then x, y = start.x, start.y
           elseif fn == toFrame.frameNumber then x, y = to.x, to.y

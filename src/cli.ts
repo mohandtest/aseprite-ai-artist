@@ -8,6 +8,7 @@
  *   doctor             tell the user exactly what is broken
  */
 
+import { fileURLToPath } from "node:url";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { Bridge } from "./bridge/bridge.js";
 import { LiveClient } from "./bridge/client.js";
@@ -182,8 +183,8 @@ async function runInstall(positional: string[], flags: Flags): Promise<void> {
   const opts = {
     scope: scope as "user" | "project",
     projectDir,
-    command: "npx",
-    args: ["-y", "@pebbly/aseprite-ai-artist@latest", "serve"],
+    command: process.execPath,
+    args: [fileURLToPath(import.meta.url), "serve"],
     env,
     dryRun,
   };
@@ -368,10 +369,10 @@ Options:
   --version, --help
 
 Examples:
-  npx @pebbly/aseprite-ai-artist install --all --agents
-  npx @pebbly/aseprite-ai-artist install codex cursor --project
-  npx @pebbly/aseprite-ai-artist doctor
-  npx @pebbly/aseprite-ai-artist serve --headless --aseprite /Applications/Aseprite.app/Contents/MacOS/aseprite
+  node dist/cli.js install --all --agents
+  node dist/cli.js install codex cursor --project
+  node dist/cli.js doctor
+  node dist/cli.js serve --headless --aseprite /Applications/Aseprite.app/Contents/MacOS/aseprite
 `,
   );
 }

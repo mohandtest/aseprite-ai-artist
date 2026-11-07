@@ -1,6 +1,6 @@
 {
   "name": "@pebbly/aseprite-ai-artist",
-  "version": "0.8.2",
+  "version": "0.9.0",
   "description": "Agent-native control layer for Aseprite. MCP server (2025-11-25 spec, designed forward to 2026-07-28) + cross-agent skills for Claude Code, omp, Codex, Gemini CLI and Cursor.",
   "license": "MIT",
   "type": "module",
@@ -33,10 +33,10 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/with-pebbly/aseprite-ai-artist.git"
+    "url": "git+https://github.com/mohandtest/aseprite-ai-artist.git"
   },
-  "homepage": "https://github.com/with-pebbly/aseprite-ai-artist#readme",
-  "bugs": "https://github.com/with-pebbly/aseprite-ai-artist/issues",
+  "homepage": "https://github.com/mohandtest/aseprite-ai-artist#readme",
+  "bugs": "https://github.com/mohandtest/aseprite-ai-artist/issues",
   "keywords": [
     "aseprite",
     "pixel-art",
@@ -59,12 +59,12 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --test --experimental-strip-types tests/color.test.ts tests/palettes.test.ts tests/render.test.ts tests/grid.test.ts tests/text.test.ts tests/bridge.test.ts tests/server.test.ts tests/rules.test.ts tests/cli.test.ts tests/install.test.ts tests/launcher.test.ts tests/omp.test.ts tests/opencode.test.ts tests/headless.test.ts",
     "lint": "tsc -p tsconfig.json --noEmit",
-    "prepublishOnly": "pnpm run clean && pnpm run build",
     "test:extension": "aseprite -b --script-param root=. --script tests/extension.test.lua",
     "test:e2e": "node tests/e2e.mjs",
     "test:pure": "lua tests/pure.test.lua",
     "gallery:check": "pnpm --filter @pebbly/gallery run check",
-    "web:dev": "pnpm --filter @pebbly/web run dev"
+    "web:dev": "pnpm --filter @pebbly/web run dev",
+    "test:agent": "node --test --experimental-strip-types tests/agent-*.test.ts"
   },
   "omp": {
     "extensions": [
@@ -81,5 +81,6 @@
     "@types/ws": "^8.18.1",
     "turbo": "^2.11.5",
     "typescript": "^5.9.2"
-  }
+  },
+  "private": true
 }

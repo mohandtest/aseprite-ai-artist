@@ -204,13 +204,7 @@ test("opencode/package.json tracks the root package version", () => {
   const plugin = JSON.parse(readFileSync(new URL("../opencode/package.json", import.meta.url), "utf8"));
   assert.equal(plugin.version, root.version, "bump both together or drift releases silently");
 
-  // The dependency supplies hooks/ and skills/ to a git install. A caret range
-  // already covers every patch release, so only a minor bump needs the range
-  // revisited — and this check is what says so, at that point, exactly once.
-  const range = plugin.dependencies?.["@pebbly/aseprite-ai-artist"] as string | undefined;
-  const caret = range ? /^\^(\d+)\.(\d+)\.\d+$/.exec(range) : null;
-  assert.ok(caret, `expected a caret dependency range, got ${range}`);
-  const [major, minor] = root.version.split(".");
-  const covers = major !== "0" ? caret[1] === major : caret[1] === major && caret[2] === minor;
-  assert.ok(covers, `caret range ${range} does not cover ${root.version} — bump it to ^${root.version}`);
+  // Local use must never install the upstream registry package as a fallback.
+  assert.equal(plugin.private,true);
+  assert.equal(plugin.dependencies?.["@pebbly/aseprite-ai-artist"],"file:..");
 });

@@ -122,32 +122,9 @@ Comments explain *why*, especially where the code looks wrong but is not. The
 Lua gotchas above are all documented at their call sites for exactly that
 reason. Do not add comments that restate the code.
 
-## Releasing
+## Local distribution
 
-Publishing is automatic: a published GitHub release triggers
-`.github/workflows/release.yml`, which runs the suite and then
-`npm publish --access public --provenance`.
-
-To cut one:
-
-1. Bump `version` in `package.json` and move the `[Unreleased]` heading in
-   `CHANGELOG.md` to that version.
-2. Commit, then tag `v<version>` — the workflow fails on purpose if the tag and
-   the manifest disagree, because npm would otherwise ship the manifest's
-   version under the release's name.
-3. Publish the GitHub release for that tag.
-
-Two things that will bite:
-
-- The npm account has 2FA on writes. The `NPM_TOKEN` secret must be a granular
-  token with **bypass 2FA** enabled (or a classic *Automation* token); an
-  ordinary token gets `403 Two-factor authentication ... is required` after
-  building the whole tarball.
-- The npm scope is `@pebbly`; the GitHub organisation is `with-pebbly`. They
-  are different names on purpose — `github.com/pebbly` belongs to someone else.
-
-A GitHub release marked *prerelease* publishes under the `next` dist-tag, so it
-does not become what a bare `npm install` resolves to.
+This fork is private for npm (`private: true`) and is used from a local checkout. GitHub Actions and publishing/deployment workflows have been removed at the owner's request. Do not restore them or publish packages/releases as part of ordinary development. Build locally with `npm run build`, run local tests, and reinstall the extension when its Lua changes. The CLI installer must point clients at the local checkout, never the upstream npm package.
 
 <!-- BEGIN:turborepo-agent-rules -->
 
