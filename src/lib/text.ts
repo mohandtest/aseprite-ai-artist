@@ -87,6 +87,7 @@ const fontCache = new Map<string, Font>();
  * same way `palette.ts` resolves `knowledge/palettes.json`.
  */
 export function loadFont(name: string): Font {
+  if (!/^[a-zA-Z0-9_-]+$/.test(name)) throw new LiveError("invalid_args", "Font must be a name in knowledge/fonts, not a path.");
   const cached = fontCache.get(name);
   if (cached) return cached;
 

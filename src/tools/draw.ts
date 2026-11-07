@@ -1,16 +1,29 @@
+import { readFile, unlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AsepriteLink } from "../bridge/link.js";
 import { LiveError } from "../lib/protocol.js";
+import { isoBox, gridOutline } from "../lib/primitives.js";
 import { compileGrid, type CanvasSize } from "../lib/grid.js";
 import { layoutText, loadFont, type TextAnchor } from "../lib/text.js";
-import { fail, hexColor, ok, targetShape } from "./kit.js";
+import { fail, hexColor, ok, okWithImage, targetShape } from "./kit.js";
 
 const textAnchor = z.enum([
-  "top_left", "top", "top_right",
-  "left", "center", "right",
-  "bottom_left", "bottom", "bottom_right",
-  "baseline_left", "baseline", "baseline_right",
+  "top_left",
+  "top",
+  "top_right",
+  "left",
+  "center",
+  "right",
+  "bottom_left",
+  "bottom",
+  "bottom_right",
+  "baseline_left",
+  "baseline",
+  "baseline_right",
 ]) satisfies z.ZodType<TextAnchor>;
 
 const pointWithColor = z.object({
@@ -36,6 +49,24 @@ const rectShape = z.object({
  * "the agent's last edit" rather than one of forty stray pixels.
  */
 const drawOp = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("iso_box"),
+    x: z.number().int(),
+    y: z.number().int(),
+    width: z.number().int().min(1).max(512),
+    depth: z.number().int().min(1).max(512),
+    height: z.number().int().min(1).max(512),
+    top: hexColor,
+    left: hexColor,
+    right: hexColor,
+  }),
+  z.object({
+    kind: z.literal("grid_patch"),
+    points: z
+      .array(z.object({ x: z.number().int(), y: z.number().int(), expectedColor: hexColor, newColor: hexColor }))
+      .min(1)
+      .max(20000),
+  }),
   z.object({
     kind: z.literal("pixels"),
     color: hexColor.optional(),
@@ -71,7 +102,15 @@ const drawOp = z.discriminatedUnion("kind", [
     kind: z.literal("fill"),
     color: hexColor,
     at: z.object({ x: z.number().int(), y: z.number().int() }),
-    tolerance: z.number().int().min(0).max(255).default(0).describe("Largest per-channel difference (0–255) still counted as the clicked colour. RGB sprites only; indexed and grayscale fills stay exact."),
+    tolerance: z
+      .number()
+      .int()
+      .min(0)
+      .max(255)
+      .default(0)
+      .describe(
+        "Largest per-channel difference (0–255) still counted as the clicked colour. RGB sprites only; indexed and grayscale fills stay exact.",
+      ),
     contiguous: z.boolean().default(true),
   }),
   z.object({
@@ -86,12 +125,7 @@ const drawOp = z.discriminatedUnion("kind", [
     colorA: hexColor,
     colorB: hexColor,
     pattern: z.enum(["checker", "bayer2", "bayer4", "bayer8", "noise"]).default("bayer4"),
-    ratio: z
-      .number()
-      .min(0)
-      .max(1)
-      .default(0.5)
-      .describe("0 = all colorA, 1 = all colorB."),
+    ratio: z.number().min(0).max(1).default(0.5).describe("0 = all colorA, 1 = all colorB."),
   }),
   z.object({
     kind: z.literal("gradient"),
@@ -143,6 +177,9 @@ const drawOp = z.discriminatedUnion("kind", [
   }),
   z.object({
     kind: z.literal("grid"),
+    outlineColor: hexColor
+      .optional()
+      .describe("Optional 4-neighbor outside outline; expands beyond the grid by one pixel."),
     x: z.number().int().default(0).describe("Sprite x of the grid's left column."),
     y: z.number().int().default(0).describe("Sprite y of the grid's top row."),
     legend: z
@@ -167,15 +204,31 @@ export function registerDrawTools(server: McpServer, live: AsepriteLink): void {
     {
       title: "Draw",
       description:
-        "Apply a batch of drawing operations to one cel, as a single undoable action. Ops: pixels, line, polyline, rect, ellipse, fill, replace, dither, gradient, clear, blit, text, grid. " +
+        "Apply a batch of drawing operations to one cel, as a single undoable action. Ops: iso_box (2:1 faces, x/y=top-back corner), grid_patch (expectedColor/newColor preconditions), pixels, line, polyline, rect, ellipse, fill, replace, dither, gradient, clear, blit, text, grid. " +
+        "Optional guard rejects stale fingerprints, edits outside allowedRegion or over change budget; mode=preview never mutates. " +
         "Batch aggressively — a whole sprite in one call is normal and correct, and it means the user can undo your work with one Ctrl+Z. " +
         "Set `paletteLock` (default true) to snap every colour to the sprite's palette by perceptual distance before anything is written, so you cannot silently widen a curated palette. " +
         "Ops run in array order, so paint fills before outlines and outlines before highlights. " +
         "'text' is laid out here from a bitmap font and expanded to plain pixels before it reaches Aseprite — pass `measureOnly: true` with only 'text' ops to get each one's ink bounds without touching the sprite, e.g. to centre a label first. " +
         "'grid' paints a picture written as text — one character per pixel, a legend mapping characters to colours, the same shape `look op=\"ascii\"` returns — so you can see the whole silhouette while you write it instead of composing it from shapes. " +
-        "It is the easiest way to draw a small sprite or a whole animation frame, and to edit one: read a region with `look op=\"ascii\" layer=… rulers=false`, change the rows, and send them back as a grid at the region's x/y.",
+        'It is the easiest way to draw a small sprite or a whole animation frame, and to edit one: read a region with `look op="ascii" layer=… rulers=false`, change the rows, and send them back as a grid at the region\'s x/y.',
       inputSchema: {
         ...targetShape,
+        mode: z
+          .enum(["apply", "preview"])
+          .default("apply")
+          .describe("Preview runs the same raster engine without document mutation or undo entries."),
+        guard: z
+          .object({
+            expectedRegionFingerprint: z.string().optional(),
+            fingerprintRegion: rectShape
+              .optional()
+              .describe("Must match the exact region read to obtain the token; omit for whole layer."),
+            allowedRegion: rectShape.optional().describe("Reject any changed pixel outside this rectangle."),
+            maxChangedPixels: z.number().int().min(0).optional(),
+            maxChangedFractionOfOpaqueTarget: z.number().min(0).max(1).optional(),
+          })
+          .optional(),
         ops: z.array(drawOp).min(1).max(512).describe("Applied in order, in one transaction."),
         paletteLock: z
           .boolean()
@@ -183,14 +236,8 @@ export function registerDrawTools(server: McpServer, live: AsepriteLink): void {
           .describe(
             "Snap every colour to the nearest palette entry (CIELAB ΔE). Set false only when the user asked to introduce new colours.",
           ),
-        selectionOnly: z
-          .boolean()
-          .default(false)
-          .describe("Clip every op to the current selection."),
-        createCel: z
-          .boolean()
-          .default(true)
-          .describe("Create the cel if the target layer/frame has none."),
+        selectionOnly: z.boolean().default(false).describe("Clip every op to the current selection."),
+        createCel: z.boolean().default(true).describe("Create the cel if the target layer/frame has none."),
         label: z
           .string()
           .optional()
@@ -203,6 +250,14 @@ export function registerDrawTools(server: McpServer, live: AsepriteLink): void {
           ),
       },
       outputSchema: {
+        applied: z.boolean().optional(),
+        preview: z.boolean().optional(),
+        actionId: z.string().optional(),
+        beforeFingerprint: z.string().optional(),
+        afterFingerprint: z.string().optional(),
+        outsideAllowedRegionChanged: z.number().int().optional(),
+        changes: z.array(z.object({ x: z.number(), y: z.number(), before: z.string(), after: z.string() })).optional(),
+        truncated: z.boolean().optional(),
         sprite: z.string().optional(),
         layer: z.string().optional(),
         frame: z.number().int().optional(),
@@ -261,31 +316,50 @@ export function registerDrawTools(server: McpServer, live: AsepriteLink): void {
 
         // A grid is bounded by the canvas, which only Aseprite knows.
         const canvas: CanvasSize | undefined = args.ops.some((op) => op.kind === "grid")
-          ? await live.call<CanvasSize>("sprite.info", { sprite: args.sprite, includePalette: false }, { expect: ["width", "height"] })
+          ? await live.call<CanvasSize>(
+              "sprite.info",
+              { sprite: args.sprite, includePalette: false },
+              { expect: ["width", "height"] },
+            )
           : undefined;
         const expandedOps: Record<string, unknown>[] = [];
         for (const op of args.ops) {
           if (op.kind === "text") {
             const layout = layoutText({ ...op, font: loadFont(op.font) });
             if (layout.pixels.length > 0) expandedOps.push({ kind: "pixels", points: layout.pixels });
+          } else if (op.kind === "iso_box") {
+            expandedOps.push(...isoBox(op));
           } else if (op.kind === "grid") {
             expandedOps.push(...compileGrid(op, canvas!).ops);
+            const outline = gridOutline(op);
+            if (outline.length) expandedOps.push({ kind: "pixels", points: outline });
           } else {
             expandedOps.push(op);
           }
         }
 
-        const data = await live.call<Record<string, unknown>>(
-          "draw.batch",
-          { ...args, ops: expandedOps, measureOnly: undefined },
-          { expect: ["opsApplied", "pixelsChanged", "layer", "frame"] },
-        );
+        const previewPath =
+          args.mode === "preview" ? path.join(tmpdir(), `aseprite-ai-preview-${randomUUID()}.png`) : undefined;
+        let image: { data: string; mimeType: string } | undefined;
+        let data: Record<string, unknown>;
+        try {
+          data = await live.call<Record<string, unknown>>(
+            args.mode === "preview" || args.guard || args.ops.some((op) => op.kind === "grid_patch")
+              ? "draw.guarded"
+              : "draw.batch",
+            { ...args, ops: expandedOps, measureOnly: undefined, previewPath },
+            { expect: ["opsApplied", "pixelsChanged", "layer", "frame"] },
+          );
+          if (previewPath) image = { data: (await readFile(previewPath)).toString("base64"), mimeType: "image/png" };
+        } finally {
+          if (previewPath) await unlink(previewPath).catch(() => {});
+        }
         const snapped = (data.colorsSnapped as { from: string; to: string; deltaE: number }[]) ?? [];
         const far = snapped.filter((s) => s.deltaE > 12);
         // Lua counts the expanded ops; the agent sent — and should hear back about — its own.
         data.opsApplied = args.ops.length;
         const summary = [
-          `${args.ops.length} op(s), ${String(data.pixelsChanged ?? 0)} pixel(s) changed on '${String(data.layer)}' frame ${String(data.frame)}.`,
+          `${args.ops.length} op(s), ${String(data.pixelsChanged ?? 0)} pixel(s) ${args.mode === "preview" ? "would change" : "changed"} on '${String(data.layer)}' frame ${String(data.frame)}.`,
         ];
         if (far.length > 0) {
           summary.push(
@@ -295,8 +369,12 @@ export function registerDrawTools(server: McpServer, live: AsepriteLink): void {
               .join(", ")}. Extend the palette if you meant those colours.`,
           );
         }
-        summary.push("Now call look to see the result before moving on.");
-        return ok(data, summary.join(" "));
+        summary.push(
+          args.mode === "preview"
+            ? "Nothing was applied. Inspect the predicted image, then repeat with mode='apply' and the same guard."
+            : "Now inspect look action_diff with the actionId, then look preview before moving on.",
+        );
+        return image ? okWithImage(data, image, "Preview only. " + summary.join(" ")) : ok(data, summary.join(" "));
       } catch (err) {
         return fail(err);
       }
@@ -314,7 +392,15 @@ export function registerDrawTools(server: McpServer, live: AsepriteLink): void {
         ...targetShape,
         rect: rectShape.optional(),
         color: hexColor.optional().describe("For op 'color'."),
-        tolerance: z.number().int().min(0).max(255).default(0).describe("Largest per-channel difference (0–255) still counted as the clicked colour. RGB sprites only; indexed and grayscale fills stay exact."),
+        tolerance: z
+          .number()
+          .int()
+          .min(0)
+          .max(255)
+          .default(0)
+          .describe(
+            "Largest per-channel difference (0–255) still counted as the clicked colour. RGB sprites only; indexed and grayscale fills stay exact.",
+          ),
         contiguous: z.boolean().default(false).describe("For op 'color'."),
         amount: z.number().int().positive().default(1).describe("Pixels, for grow/shrink."),
         mode: z
